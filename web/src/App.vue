@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from './api'
-import type { Project, Seed, SeedStatus, SeedType } from './types'
+import type { Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
 
 const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'all', label: '全部类型', icon: '◇' },
@@ -11,27 +11,34 @@ const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'bug', label: 'Bug', icon: '⌁' },
 ]
 const statuses: { value: SeedStatus; label: string }[] = [
-  { value: 'inbox', label: '待实现' }, { value: 'planned', label: '已拆分' },
-  { value: 'done', label: '已完成' }, { value: 'archived', label: '已废弃' },
+  { value: 'inbox', label: '待实现' }, { value: 'done', label: '已完成' },
+]
+const priorities: { value: SeedPriority; label: string }[] = [
+  { value: 'high', label: '高' }, { value: 'middle', label: '中' }, { value: 'low', label: '低' },
 ]
 
 const projects = ref<Project[]>([])
 const seeds = ref<Seed[]>([])
-const allSeeds = ref<Seed[]>([])
+const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, done: 0, high: 0, middle: 0, low: 0 })
+const counts = ref<SeedCounts>(emptyCounts())
 const projectId = ref<number>(0)
 const filter = ref<SeedType | 'all'>('all')
-const statusFilter = ref<SeedStatus | 'all'>('all')
+const statusFilter = ref<SeedStatus | 'all'>('inbox')
+const priorityFilter = ref<SeedPriority | 'all'>('all')
 const projectDialog = ref(false)
 const seedDialog = ref(false)
+const contentInput = ref<HTMLTextAreaElement | null>(null)
 const editingId = ref<number | null>(null)
+const editingSeed = ref<Seed | null>(null)
 const busy = ref(false)
 const error = ref('')
 const projectForm = reactive({ name: '', description: '' })
-const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 0 })
+const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 'middle' as SeedPriority })
 
 const currentProject = computed(() => projects.value.find(p => p.id === projectId.value))
-const count = (type: SeedType | 'all') => type === 'all' ? allSeeds.value.length : allSeeds.value.filter(s => s.type === type).length
-const statusCount = (status: SeedStatus | 'all') => status === 'all' ? allSeeds.value.length : allSeeds.value.filter(s => s.status === status).length
+const count = (type: SeedType | 'all') => type === 'all' ? counts.value.total : counts.value[type]
+const statusCount = (status: SeedStatus | 'all') => status === 'all' ? counts.value.total : counts.value[status]
+const priorityCount = (priority: SeedPriority | 'all') => priority === 'all' ? counts.value.total : counts.value[priority]
 
 async function loadProjects() {
   try {
@@ -41,17 +48,13 @@ async function loadProjects() {
   } catch (e) { showError(e) }
 }
 async function loadSeeds() {
-  if (!projectId.value) { seeds.value = []; allSeeds.value = []; return }
+  if (!projectId.value) { seeds.value = []; counts.value = emptyCounts(); return }
   busy.value = true
   try {
-    const [items, all] = await Promise.all([
-      api.seeds(projectId.value, filter.value, statusFilter.value),
-      api.seeds(projectId.value, 'all', 'all'),
-    ])
-    seeds.value = items
-    allSeeds.value = all
-  }
-  catch (e) { showError(e) }
+    const result = await api.seeds(projectId.value, filter.value, statusFilter.value, priorityFilter.value)
+    seeds.value = result.items
+    counts.value = result.counts
+  } catch (e) { showError(e) }
   finally { busy.value = false }
 }
 async function createProject() {
@@ -64,12 +67,22 @@ async function createProject() {
 }
 function openSeed(seed?: Seed) {
   editingId.value = seed?.id ?? null
+  editingSeed.value = seed ?? null
   seedForm.type = seed?.type ?? (filter.value === 'all' ? 'todo' : filter.value)
   seedForm.status = seed?.status ?? 'inbox'
   seedForm.title = seed?.title ?? ''
   seedForm.content = seed?.content ?? ''
-  seedForm.priority = seed?.priority ?? 0
+  seedForm.priority = seed?.priority ?? 'middle'
   seedDialog.value = true
+  nextTick(resizeContent)
+}
+function resizeContent(target: HTMLTextAreaElement | null = contentInput.value) {
+  if (!target) return
+  target.style.height = 'auto'
+  target.style.height = `${target.scrollHeight}px`
+}
+function resizeContentFromEvent(event: Event) {
+  resizeContent(event.target as HTMLTextAreaElement)
 }
 async function saveSeed() {
   if (!seedForm.title.trim() || !projectId.value) return
@@ -80,8 +93,8 @@ async function saveSeed() {
     seedDialog.value = false; await loadSeeds()
   } catch (e) { showError(e) }
 }
-async function updateSeedMeta(seed: Seed, field: "type" | "status", event: Event) {
-  const value = (event.target as HTMLSelectElement).value as SeedType | SeedStatus
+async function updateSeedMeta(seed: Seed, field: "type" | "status" | "priority", event: Event) {
+  const value = (event.target as HTMLSelectElement).value as SeedType | SeedStatus | SeedPriority
   const previous = seed[field]
   Object.assign(seed, { [field]: value })
   try {
@@ -99,15 +112,31 @@ async function removeSeed(id: number) {
 function showError(value: unknown) { error.value = value instanceof Error ? value.message : '操作失败'; window.setTimeout(() => error.value = '', 3000) }
 function typeInfo(value: SeedType) { return types.find(t => t.value === value)! }
 function statusLabel(value: SeedStatus) { return statuses.find(s => s.value === value)?.label }
+function formatTime(value?: string | null) {
+  if (!value) return '尚未完成'
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T') + 'Z'
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
 
-watch([projectId, filter, statusFilter], loadSeeds)
-onMounted(loadProjects)
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (seedDialog.value) seedDialog.value = false
+  else if (projectDialog.value) projectDialog.value = false
+}
+
+watch([projectId, filter, statusFilter, priorityFilter], loadSeeds)
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+  loadProjects()
+})
+onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
 </script>
 
 <template>
   <main class="shell">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark">芽</span><div><strong>拾种</strong><small>WORKSEED</small></div><span class="brand-tagline">把工作中的每个念头，都安放在这里。</span></div>
+      <div class="brand"><img class="brand-mark" src="/favicon.png" alt="" /><div><strong>拾种</strong><small>WORKSEED</small></div><span class="brand-tagline">把工作中的每个念头，都安放在这里。</span></div>
       <div class="project-picker">
         <span class="label">当前项目</span>
         <select v-model="projectId"><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select>
@@ -118,30 +147,38 @@ onMounted(loadProjects)
 
     <section v-if="currentProject?.description" class="hero">
       <p class="eyebrow">{{ currentProject.description }}</p>
-      <div class="summary"><strong>{{ seeds.length }}</strong><span>颗种子</span></div>
     </section>
 
     <div class="filter-row">
-      <nav class="filters" aria-label="种子类型">
-      <button v-for="item in types" :key="item.value" :class="{ active: filter === item.value }" @click="filter = item.value">
-        <span>{{ item.icon }}</span>{{ item.label }}<em>{{ count(item.value) }}</em>
-      </button>
-    </nav>
-
-      <nav class="filters status-filters" aria-label="种子状态">
-      <button :class="{ active: statusFilter === 'all' }" v-on:click="statusFilter = 'all'">全部状态<em>{{ statusCount('all') }}</em></button>
-      <button v-for="item in statuses" :key="item.value" :class="{ active: statusFilter === item.value }" v-on:click="statusFilter = item.value">{{ item.label }}<em>{{ statusCount(item.value) }}</em></button>
-      </nav>
+      <label class="filter-control">类型
+        <select v-model="filter" aria-label="按种子类型筛选">
+          <option value="all">全部类型（{{ count('all') }}）</option>
+          <option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}（{{ count(item.value) }}）</option>
+        </select>
+      </label>
+      <label class="filter-control">状态
+        <select v-model="statusFilter" aria-label="按种子状态筛选">
+          <option value="all">全部状态（{{ statusCount('all') }}）</option>
+          <option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}（{{ statusCount(item.value) }}）</option>
+        </select>
+      </label>
+      <label class="filter-control">优先级
+        <select v-model="priorityFilter" aria-label="按种子优先级筛选">
+          <option value="all">全部优先级（{{ priorityCount('all') }}）</option>
+          <option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}（{{ priorityCount(item.value) }}）</option>
+        </select>
+      </label>
+      <div class="filter-result" aria-live="polite">当前共过滤出 <strong>{{ seeds.length }}</strong> 颗种子</div>
     </div>
 
     <section class="seed-list">
       <p v-if="busy" class="empty">正在翻土……</p>
       <div v-else-if="!projectId" class="empty"><b>先创建一个项目</b><span>项目是一片苗圃，用来收纳相关的工作种子。</span></div>
-      <div v-else-if="!seeds.length && (filter !== 'all' || statusFilter !== 'all')" class="empty"><b>没有符合条件的种子</b><span>尝试切换类型或状态筛选。</span><button class="quiet" v-on:click="filter = 'all'; statusFilter = 'all'">清除筛选</button></div>
+      <div v-else-if="!seeds.length && (filter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all')" class="empty"><b>没有符合条件的种子</b><span>尝试切换类型、状态或优先级筛选。</span><button class="quiet" v-on:click="filter = 'all'; statusFilter = 'all'; priorityFilter = 'all'">清除筛选</button></div>
       <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>
-        <div class="seed-body"><div class="seed-meta"><select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></div><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div>
+        <div class="seed-body"><div class="seed-meta"><select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></div><div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div></div>
         <button class="icon-button" title="删除" @click.stop="removeSeed(seed.id)">×</button>
       </article>
     </section>
@@ -152,7 +189,7 @@ onMounted(loadProjects)
   </div>
 
   <div v-if="seedDialog" class="overlay" @click.self="seedDialog = false">
-    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea v-model="seedForm.content" rows="6" placeholder="背景、想法或验收方式……"></textarea></label><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
+    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
   </div>
   <div v-if="error" class="toast">{{ error }}</div>
 </template>
