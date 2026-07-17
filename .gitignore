@@ -1,0 +1,8 @@
+/workseed
+web/node_modules/
+web/*.tsbuildinfo
+data/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
