@@ -30,8 +30,10 @@ const seedDialog = ref(false)
 const contentInput = ref<HTMLTextAreaElement | null>(null)
 const editingId = ref<number | null>(null)
 const editingSeed = ref<Seed | null>(null)
+const copiedSeedId = ref<number | null>(null)
 const busy = ref(false)
 const error = ref('')
+let copyFeedbackTimer: number | undefined
 const projectForm = reactive({ name: '', description: '' })
 const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 'middle' as SeedPriority })
 
@@ -105,6 +107,28 @@ async function updateSeedMeta(seed: Seed, field: "type" | "status" | "priority",
     showError(e)
   }
 }
+async function writeClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return } catch { /* 使用兼容方案 */ }
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  textarea.remove()
+  if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限')
+}
+async function copySeed(seed: Seed) {
+  const text = [seed.title, seed.content].filter(Boolean).join('\n')
+  try {
+    await writeClipboard(text)
+    copiedSeedId.value = seed.id
+    window.clearTimeout(copyFeedbackTimer)
+    copyFeedbackTimer = window.setTimeout(() => copiedSeedId.value = null, 1600)
+  } catch (e) { showError(e) }
+}
 async function removeSeed(id: number) {
   if (!confirm('确定删除这颗种子吗？')) return
   try { await api.deleteSeed(id); await loadSeeds() } catch (e) { showError(e) }
@@ -130,7 +154,10 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   loadProjects()
 })
-onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  window.clearTimeout(copyFeedbackTimer)
+})
 </script>
 
 <template>
@@ -178,7 +205,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
       <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>
-        <div class="seed-body"><div class="seed-meta"><select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></div><div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div></div>
+        <div class="seed-body"><div class="seed-meta"><select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select><button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button></div><div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div></div>
         <button class="icon-button" title="删除" @click.stop="removeSeed(seed.id)">×</button>
       </article>
     </section>
@@ -193,4 +220,3 @@ onBeforeUnmount(() => document.removeEventListener('keydown', handleKeydown))
   </div>
   <div v-if="error" class="toast">{{ error }}</div>
 </template>
-
