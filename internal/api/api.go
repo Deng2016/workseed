@@ -28,7 +28,9 @@ type seed struct {
 	Priority    string  `json:"priority"`
 	CreatedAt   string  `json:"createdAt"`
 	UpdatedAt   string  `json:"updatedAt"`
+	StartedAt   *string `json:"startedAt"`
 	CompletedAt *string `json:"completedAt"`
+	DurationSec *int64  `json:"durationSeconds"`
 }
 
 func Register(mux *http.ServeMux, db *sql.DB) {
@@ -94,7 +96,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 		}
 		kind := r.URL.Query().Get("type")
 		status := r.URL.Query().Get("status")
-		if status != "" && status != "all" && !contains([]string{"inbox", "done"}, status) {
+		if status != "" && status != "all" && !contains([]string{"inbox", "doing", "done"}, status) {
 			problem(w, 400, "无效的状态")
 			return
 		}
@@ -103,7 +105,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "无效的优先级")
 			return
 		}
-		query := `SELECT id, project_id, type, status, title, content, priority, created_at, updated_at, completed_at FROM seeds WHERE project_id = ?`
+		query := `SELECT ` + seedColumns + ` FROM seeds WHERE project_id = ?`
 		args := []any{projectID}
 		if kind != "" && kind != "all" {
 			query += ` AND type = ?`
@@ -117,7 +119,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			query += ` AND priority = ?`
 			args = append(args, priority)
 		}
-		query += ` ORDER BY CASE status WHEN 'inbox' THEN 0 ELSE 1 END, CASE priority WHEN 'high' THEN 0 WHEN 'middle' THEN 1 ELSE 2 END, updated_at DESC`
+		query += ` ORDER BY created_at DESC, id DESC`
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
 			problem(w, 500, err.Error())
@@ -127,7 +129,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 		items := []seed{}
 		for rows.Next() {
 			var item seed
-			if err := rows.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.CompletedAt); err != nil {
+			if err := scanSeed(rows, &item); err != nil {
 				problem(w, 500, err.Error())
 				return
 			}
@@ -157,12 +159,18 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, err.Error())
 			return
 		}
-		res, err := s.db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority, completed_at) VALUES(?, ?, ?, ?, ?, ?, CASE WHEN ?='done' THEN CURRENT_TIMESTAMP ELSE NULL END)`, in.ProjectID, in.Type, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, in.Status)
+		res, err := s.db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority, started_at, completed_at)
+			VALUES(?, ?, ?, ?, ?, ?, CASE WHEN ?='doing' THEN CURRENT_TIMESTAMP ELSE NULL END, CASE WHEN ?='done' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+			in.ProjectID, in.Type, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, in.Status, in.Status)
 		if err != nil {
 			problem(w, 500, err.Error())
 			return
 		}
 		in.ID, _ = res.LastInsertId()
+		if err := s.readSeed(in.ID, &in); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
 		writeJSON(w, 201, in)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -187,12 +195,25 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, err.Error())
 			return
 		}
-		_, err = s.db.Exec(`UPDATE seeds SET type=?, status=?, title=?, content=?, priority=?, updated_at=CURRENT_TIMESTAMP, completed_at=CASE WHEN ?='done' THEN COALESCE(completed_at, CURRENT_TIMESTAMP) ELSE NULL END WHERE id=?`, in.Type, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, in.Status, id)
+		_, err = s.db.Exec(`UPDATE seeds SET
+			type=?,
+			started_at=CASE WHEN ?='doing' AND status<>'doing' THEN CURRENT_TIMESTAMP ELSE started_at END,
+			completed_at=CASE WHEN ?='done' AND status<>'done' THEN CURRENT_TIMESTAMP WHEN ?<>'done' THEN NULL ELSE completed_at END,
+			duration_seconds=CASE
+				WHEN ?='done' AND status<>'done' AND started_at IS NOT NULL THEN MAX(0, unixepoch(CURRENT_TIMESTAMP)-unixepoch(started_at))
+				WHEN ?<>'done' THEN NULL
+				ELSE duration_seconds
+			END,
+			status=?, title=?, content=?, priority=?, updated_at=CURRENT_TIMESTAMP
+			WHERE id=?`, in.Type, in.Status, in.Status, in.Status, in.Status, in.Status, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, id)
 		if err != nil {
 			problem(w, 500, err.Error())
 			return
 		}
-		in.ID = id
+		if err := s.readSeed(id, &in); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
 		writeJSON(w, 200, in)
 	case http.MethodDelete:
 		if _, err := s.db.Exec(`DELETE FROM seeds WHERE id=?`, id); err != nil {
@@ -206,18 +227,18 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) error {
-	var total, idea, feature, todo, bug, inbox, done, high, middle, low int
+	var total, idea, feature, todo, bug, inbox, doing, done, high, middle, low int
 	err := db.QueryRow(`SELECT COUNT(*),
 		COALESCE(SUM(type = 'idea'), 0), COALESCE(SUM(type = 'feature'), 0),
 		COALESCE(SUM(type = 'todo'), 0), COALESCE(SUM(type = 'bug'), 0),
-		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'done'), 0),
+		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'doing'), 0), COALESCE(SUM(status = 'done'), 0),
 		COALESCE(SUM(priority = 'high'), 0), COALESCE(SUM(priority = 'middle'), 0),
 		COALESCE(SUM(priority = 'low'), 0) FROM seeds WHERE project_id = ?`, projectID).
-		Scan(&total, &idea, &feature, &todo, &bug, &inbox, &done, &high, &middle, &low)
+		Scan(&total, &idea, &feature, &todo, &bug, &inbox, &doing, &done, &high, &middle, &low)
 	if err != nil {
 		return err
 	}
-	values := map[string]int{"Total": total, "Idea": idea, "Feature": feature, "Todo": todo, "Bug": bug, "Inbox": inbox, "Done": done, "High": high, "Middle": middle, "Low": low}
+	values := map[string]int{"Total": total, "Idea": idea, "Feature": feature, "Todo": todo, "Bug": bug, "Inbox": inbox, "Doing": doing, "Done": done, "High": high, "Middle": middle, "Low": low}
 	for name, value := range values {
 		w.Header().Set("X-Seed-Count-"+name, strconv.Itoa(value))
 	}
@@ -243,13 +264,27 @@ func validateSeed(s *seed) error {
 	if !contains([]string{"idea", "feature", "todo", "bug"}, s.Type) {
 		return errors.New("无效的种子类型")
 	}
-	if !contains([]string{"inbox", "done"}, s.Status) {
+	if !contains([]string{"inbox", "doing", "done"}, s.Status) {
 		return errors.New("无效的状态")
 	}
 	if !contains([]string{"high", "middle", "low"}, s.Priority) {
 		return errors.New("无效的优先级")
 	}
 	return nil
+}
+
+const seedColumns = `id, project_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds`
+
+type seedScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSeed(row seedScanner, item *seed) error {
+	return row.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.StartedAt, &item.CompletedAt, &item.DurationSec)
+}
+
+func (s *server) readSeed(id int64, item *seed) error {
+	return scanSeed(s.db.QueryRow(`SELECT `+seedColumns+` FROM seeds WHERE id=?`, id), item)
 }
 
 func isProjectNameConflict(err error) bool {

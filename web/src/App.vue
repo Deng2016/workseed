@@ -11,7 +11,7 @@ const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'bug', label: 'Bug', icon: '⌁' },
 ]
 const statuses: { value: SeedStatus; label: string }[] = [
-  { value: 'inbox', label: '待实现' }, { value: 'done', label: '已完成' },
+  { value: 'inbox', label: '待实现' }, { value: 'doing', label: '进行中' }, { value: 'done', label: '已完成' },
 ]
 const priorities: { value: SeedPriority; label: string }[] = [
   { value: 'high', label: '高' }, { value: 'middle', label: '中' }, { value: 'low', label: '低' },
@@ -19,7 +19,7 @@ const priorities: { value: SeedPriority; label: string }[] = [
 
 const projects = ref<Project[]>([])
 const seeds = ref<Seed[]>([])
-const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, done: 0, high: 0, middle: 0, low: 0 })
+const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, done: 0, high: 0, middle: 0, low: 0 })
 const counts = ref<SeedCounts>(emptyCounts())
 const projectId = ref<number>(0)
 const filter = ref<SeedType | 'all'>('all')
@@ -137,10 +137,23 @@ function showError(value: unknown) { error.value = value instanceof Error ? valu
 function typeInfo(value: SeedType) { return types.find(t => t.value === value)! }
 function statusLabel(value: SeedStatus) { return statuses.find(s => s.value === value)?.label }
 function formatTime(value?: string | null) {
-  if (!value) return '尚未完成'
+  if (!value) return '—'
   const normalized = value.includes('T') ? value : value.replace(' ', 'T') + 'Z'
   const date = new Date(normalized)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+function formatDuration(value?: number | null) {
+  if (value == null) return '—'
+  const days = Math.floor(value / 86400)
+  const hours = Math.floor(value % 86400 / 3600)
+  const minutes = Math.floor(value % 3600 / 60)
+  const seconds = value % 60
+  const parts = []
+  if (days) parts.push(`${days}天`)
+  if (hours) parts.push(`${hours}小时`)
+  if (minutes) parts.push(`${minutes}分钟`)
+  if (!parts.length || seconds) parts.push(`${seconds}秒`)
+  return parts.join(' ')
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -205,7 +218,18 @@ onBeforeUnmount(() => {
       <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>
-        <div class="seed-body"><div class="seed-meta"><select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i><select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select><button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button></div><div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div></div>
+        <div class="seed-body">
+          <div class="seed-meta">
+            <select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
+            <select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
+            <select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+            <button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button>
+            <span v-if="seed.status === 'done' && seed.startedAt" class="list-timestamp">开始时间 {{ formatTime(seed.startedAt) }}</span>
+            <span v-if="seed.status === 'done' && seed.completedAt" class="list-timestamp">完成时间 {{ formatTime(seed.completedAt) }}</span>
+            <span v-if="seed.status === 'done' && seed.durationSeconds != null" class="list-timestamp">耗时 {{ formatDuration(seed.durationSeconds) }}</span>
+          </div>
+          <div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div>
+        </div>
         <button class="icon-button" title="删除" @click.stop="removeSeed(seed.id)">×</button>
       </article>
     </section>
@@ -216,7 +240,7 @@ onBeforeUnmount(() => {
   </div>
 
   <div v-if="seedDialog" class="overlay" @click.self="seedDialog = false">
-    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
+    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>开始时间<strong>{{ formatTime(editingSeed.startedAt) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span><span>耗时<strong>{{ formatDuration(editingSeed.durationSeconds) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
   </div>
   <div v-if="error" class="toast">{{ error }}</div>
 </template>

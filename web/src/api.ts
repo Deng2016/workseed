@@ -28,7 +28,7 @@ export const api = {
     const readCount = (name: string) => Number(response.headers.get("X-Seed-Count-" + name) || 0)
     return { items, counts: {
       total: readCount("Total"), idea: readCount("Idea"), feature: readCount("Feature"),
-      todo: readCount("Todo"), bug: readCount("Bug"), inbox: readCount("Inbox"), done: readCount("Done"),
+      todo: readCount("Todo"), bug: readCount("Bug"), inbox: readCount("Inbox"), doing: readCount("Doing"), done: readCount("Done"),
       high: readCount("High"), middle: readCount("Middle"), low: readCount("Low"),
     } }
   },
@@ -38,4 +38,3 @@ export const api = {
     request<Seed>(`/api/seeds/${seed.id}`, { method: 'PATCH', body: JSON.stringify(seed) }),
   deleteSeed: (id: number) => request<void>(`/api/seeds/${id}`, { method: 'DELETE' }),
 }
-

@@ -30,19 +30,22 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize schema: %w", err)
 	}
-	if err := migrateSeedEnums(db); err != nil {
+	if err := migrateSeedSchema(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("migrate seed enums: %w", err)
+		return nil, fmt.Errorf("migrate seed schema: %w", err)
 	}
 	return db, nil
 }
 
-func migrateSeedEnums(db *sql.DB) error {
+func migrateSeedSchema(db *sql.DB) error {
 	var definition string
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'seeds'`).Scan(&definition); err != nil {
 		return err
 	}
 	isFinalSchema := strings.Contains(definition, "priority TEXT") &&
+		strings.Contains(definition, "'doing'") &&
+		strings.Contains(definition, "started_at TEXT") &&
+		strings.Contains(definition, "duration_seconds INTEGER") &&
 		!strings.Contains(definition, "'planned'") &&
 		!strings.Contains(definition, "'someday'") &&
 		!strings.Contains(definition, "'archived'")
@@ -59,34 +62,36 @@ func migrateSeedEnums(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(seedEnumsMigration); err != nil {
+	if _, err = tx.Exec(seedSchemaMigration); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-const seedEnumsMigration = `
+const seedSchemaMigration = `
 DROP INDEX IF EXISTS idx_seeds_project_type_status;
-ALTER TABLE seeds RENAME TO seeds_before_enum_migration;
+ALTER TABLE seeds RENAME TO seeds_before_schema_migration;
 
 CREATE TABLE seeds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES seeds(id) ON DELETE SET NULL,
   type TEXT NOT NULL CHECK (type IN ('idea', 'feature', 'todo', 'bug')),
-  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'done')),
+  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'done')),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'middle' CHECK (priority IN ('high', 'middle', 'low')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  completed_at TEXT
+  started_at TEXT,
+  completed_at TEXT,
+  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
 );
 
-INSERT INTO seeds(id, project_id, parent_id, type, status, title, content, priority, created_at, updated_at, completed_at)
+INSERT INTO seeds(id, project_id, parent_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds)
 SELECT
   id, project_id, parent_id, type,
-  CASE status WHEN 'done' THEN 'done' ELSE 'inbox' END,
+  CASE status WHEN 'doing' THEN 'doing' WHEN 'done' THEN 'done' ELSE 'inbox' END,
   title, content,
   CASE
     WHEN status IN ('archived', 'someday') THEN 'low'
@@ -95,10 +100,10 @@ SELECT
     WHEN CAST(priority AS INTEGER) = 1 THEN 'low'
     ELSE 'middle'
   END,
-  created_at, updated_at, completed_at
-FROM seeds_before_enum_migration;
+  created_at, updated_at, NULL, completed_at, NULL
+FROM seeds_before_schema_migration;
 
-DROP TABLE seeds_before_enum_migration;
+DROP TABLE seeds_before_schema_migration;
 CREATE INDEX idx_seeds_project_type_status
 ON seeds(project_id, type, status, updated_at DESC);
 `
@@ -120,17 +125,16 @@ CREATE TABLE IF NOT EXISTS seeds (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES seeds(id) ON DELETE SET NULL,
   type TEXT NOT NULL CHECK (type IN ('idea', 'feature', 'todo', 'bug')),
-  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'done')),
+  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'done')),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'middle' CHECK (priority IN ('high', 'middle', 'low')),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  completed_at TEXT
+  started_at TEXT,
+  completed_at TEXT,
+  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
 );
-
-UPDATE seeds SET status = 'inbox', updated_at = CURRENT_TIMESTAMP
-WHERE status = 'doing';
 
 CREATE INDEX IF NOT EXISTS idx_seeds_project_type_status
 ON seeds(project_id, type, status, updated_at DESC);

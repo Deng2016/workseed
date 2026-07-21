@@ -1,5 +1,5 @@
 export type SeedType = 'idea' | 'feature' | 'todo' | 'bug'
-export type SeedStatus = 'inbox' | 'done'
+export type SeedStatus = 'inbox' | 'doing' | 'done'
 export type SeedPriority = 'high' | 'middle' | 'low'
 
 export interface Project {
@@ -16,6 +16,7 @@ export interface SeedCounts {
   todo: number
   bug: number
   inbox: number
+  doing: number
   done: number
   high: number
   middle: number
@@ -34,6 +35,7 @@ export interface Seed {
   priority: SeedPriority
   createdAt?: string
   updatedAt?: string
+  startedAt?: string | null
   completedAt?: string | null
+  durationSeconds?: number | null
 }
-
