@@ -36,9 +36,9 @@ const activeQuickRange = ref<QuickRange | null>('month')
 const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, done: 0, high: 0, middle: 0, low: 0 })
 const counts = ref<SeedCounts>(emptyCounts())
 const projectId = ref<number>(0)
-const filter = ref<SeedType | 'all'>('all')
-const statusFilter = ref<SeedStatus | 'all'>('inbox')
-const priorityFilter = ref<SeedPriority | 'all'>('all')
+const filter = ref<SeedType[]>(['idea', 'feature', 'todo', 'bug'])
+const statusFilter = ref<SeedStatus[]>(['inbox', 'doing'])
+const priorityFilter = ref<SeedPriority[]>(['high', 'middle', 'low'])
 const projectDialog = ref(false)
 const seedDialog = ref(false)
 const contentInput = ref<HTMLTextAreaElement | null>(null)
@@ -125,7 +125,7 @@ async function createProject() {
 function openSeed(seed?: Seed) {
   editingId.value = seed?.id ?? null
   editingSeed.value = seed ?? null
-  seedForm.type = seed?.type ?? (filter.value === 'all' ? 'todo' : filter.value)
+  seedForm.type = seed?.type ?? filter.value[0] ?? 'todo'
   seedForm.status = seed?.status ?? 'inbox'
   seedForm.title = seed?.title ?? ''
   seedForm.content = seed?.content ?? ''
@@ -246,6 +246,26 @@ function applyQuickRange(range: QuickRange) {
   loadWorklogs()
 }
 function useCustomRange() { activeQuickRange.value = null }
+function resetFilters() {
+  filter.value = ['idea', 'feature', 'todo', 'bug']
+  statusFilter.value = ['inbox', 'doing']
+  priorityFilter.value = ['high', 'middle', 'low']
+}
+function toggleSelection<T>(values: T[], value: T) {
+  const index = values.indexOf(value)
+  if (index === -1) values.push(value)
+  else values.splice(index, 1)
+}
+function toggleTypeFilter(value: SeedType | 'all') {
+  if (value !== 'all') toggleSelection(filter.value, value)
+}
+function isTypeSelected(value: SeedType | 'all') { return value !== 'all' && filter.value.includes(value) }
+function toggleStatusFilter(value: SeedStatus) { toggleSelection(statusFilter.value, value) }
+function togglePriorityFilter(value: SeedPriority) { toggleSelection(priorityFilter.value, value) }
+function closeFilterDropdown(event: MouseEvent) {
+  const details = event.currentTarget as HTMLDetailsElement
+  details.open = false
+}
 function toggleNode(key: string) {
   const next = new Set(collapsedNodes.value)
   if (next.has(key)) next.delete(key)
@@ -268,7 +288,7 @@ function handleKeydown(event: KeyboardEvent) {
   else if (projectDialog.value) projectDialog.value = false
 }
 
-watch([projectId, filter, statusFilter, priorityFilter], loadSeeds)
+watch([projectId, filter, statusFilter, priorityFilter], loadSeeds, { deep: true })
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('hashchange', syncPageFromHash)
@@ -300,31 +320,25 @@ onBeforeUnmount(() => {
     </section>
 
     <div class="filter-row">
-      <label class="filter-control">类型
-        <select v-model="filter" aria-label="按种子类型筛选">
-          <option value="all">全部类型（{{ count('all') }}）</option>
-          <option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}（{{ count(item.value) }}）</option>
-        </select>
-      </label>
-      <label class="filter-control">状态
-        <select v-model="statusFilter" aria-label="按种子状态筛选">
-          <option value="all">全部状态（{{ statusCount('all') }}）</option>
-          <option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}（{{ statusCount(item.value) }}）</option>
-        </select>
-      </label>
-      <label class="filter-control">优先级
-        <select v-model="priorityFilter" aria-label="按种子优先级筛选">
-          <option value="all">全部优先级（{{ priorityCount('all') }}）</option>
-          <option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}（{{ priorityCount(item.value) }}）</option>
-        </select>
-      </label>
+      <details class="filter-control filter-dropdown" @mouseleave="closeFilterDropdown">
+        <summary><span>类型</span><strong>已选 {{ filter.length }}/{{ types.length - 1 }}</strong></summary>
+        <div class="filter-menu" role="group" aria-label="按种子类型筛选"><label v-for="item in types.slice(1)" :key="item.value" class="check-option" @click.prevent="toggleTypeFilter(item.value)"><input type="checkbox" :checked="isTypeSelected(item.value)" /><span>{{ item.label }}</span><em>{{ count(item.value) }}</em></label></div>
+      </details>
+      <details class="filter-control filter-dropdown" @mouseleave="closeFilterDropdown">
+        <summary><span>状态</span><strong>已选 {{ statusFilter.length }}/{{ statuses.length }}</strong></summary>
+        <div class="filter-menu" role="group" aria-label="按种子状态筛选"><label v-for="item in statuses" :key="item.value" class="check-option" @click.prevent="toggleStatusFilter(item.value)"><input type="checkbox" :checked="statusFilter.includes(item.value)" /><span>{{ item.label }}</span><em>{{ statusCount(item.value) }}</em></label></div>
+      </details>
+      <details class="filter-control filter-dropdown" @mouseleave="closeFilterDropdown">
+        <summary><span>优先级</span><strong>已选 {{ priorityFilter.length }}/{{ priorities.length }}</strong></summary>
+        <div class="filter-menu" role="group" aria-label="按种子优先级筛选"><label v-for="item in priorities" :key="item.value" class="check-option" @click.prevent="togglePriorityFilter(item.value)"><input type="checkbox" :checked="priorityFilter.includes(item.value)" /><span>{{ item.label }}</span><em>{{ priorityCount(item.value) }}</em></label></div>
+      </details>
       <div class="filter-result" aria-live="polite">当前共过滤出 <strong>{{ seeds.length }}</strong> 颗种子</div>
     </div>
 
     <section class="seed-list">
       <p v-if="busy" class="empty">正在翻土……</p>
       <div v-else-if="!projectId" class="empty"><b>先创建一个项目</b><span>项目是一片苗圃，用来收纳相关的工作种子。</span></div>
-      <div v-else-if="!seeds.length && (filter !== 'all' || statusFilter !== 'all' || priorityFilter !== 'all')" class="empty"><b>没有符合条件的种子</b><span>尝试切换类型、状态或优先级筛选。</span><button class="quiet" v-on:click="filter = 'all'; statusFilter = 'all'; priorityFilter = 'all'">清除筛选</button></div>
+      <div v-else-if="!seeds.length && counts.total > 0" class="empty"><b>没有符合条件的种子</b><span>尝试切换类型、状态或优先级筛选。</span><button class="quiet" @click="resetFilters">恢复默认筛选</button></div>
       <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>

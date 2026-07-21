@@ -118,7 +118,7 @@ cp -a ./data ./data-backup
 | --- | --- | --- |
 | `GET` | `/api/projects` | 获取项目列表 |
 | `POST` | `/api/projects` | 创建项目 |
-| `GET` | `/api/seeds?projectId=1&type=all&status=inbox&priority=all` | 获取并过滤种子 |
+| `GET` | `/api/seeds?projectId=1&type=idea&type=todo&status=inbox&status=doing&priority=high` | 获取并过滤种子 |
 | `POST` | `/api/seeds` | 创建种子 |
 | `PATCH` | `/api/seeds/{id}` | 更新种子 |
 | `DELETE` | `/api/seeds/{id}` | 删除种子 |
@@ -147,7 +147,7 @@ cp -a ./data ./data-backup
 }
 ```
 
-种子字段的可选值参见 README 中的[字段约定](../README.md#字段约定)。种子列表接口还会通过 `X-Seed-Count-*` 响应头返回各类型、状态和优先级的总数，供前端在单次请求中展示筛选统计。
+种子字段的可选值参见 README 中的[字段约定](../README.md#字段约定)。列表接口的 `type`、`status`、`priority` 参数可重复传递以实现多选，也兼容逗号分隔值；参数值为空表示该组不选择任何值。接口还会通过 `X-Seed-Count-*` 响应头返回各类型、状态和优先级的总数，供前端在单次请求中展示筛选统计。
 
 种子列表按 `createdAt` 倒序返回。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时计算耗时。状态可在 `inbox`、`doing`、`done` 之间自由切换。
 

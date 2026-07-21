@@ -158,6 +158,57 @@ func TestSeedsAreOrderedByCreationTimeDescending(t *testing.T) {
 	}
 }
 
+func TestSeedsSupportMultipleAndEmptyFilters(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('多选筛选项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority) VALUES
+		(?, 'idea', 'inbox', '灵感待实现', 'high'),
+		(?, 'feature', 'doing', '功能进行中', 'middle'),
+		(?, 'todo', 'done', '事项已完成', 'low'),
+		(?, 'bug', 'inbox', '缺陷待实现', 'low')`, projectID, projectID, projectID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/seeds?projectId="+itoa(projectID)+"&type=idea&type=feature&status=inbox,doing&priority=high&priority=middle", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var items []seed
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Title != "功能进行中" || items[1].Title != "灵感待实现" {
+		t.Fatalf("filtered items = %#v", items)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/seeds?projectId="+itoa(projectID)+"&type=&status=inbox", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("empty filter status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("empty type selection returned %d items", len(items))
+	}
+}
+
 func TestWorklogsFilterByCompletionTime(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {

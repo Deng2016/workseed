@@ -18,8 +18,16 @@ export const api = {
   projects: () => request<Project[]>('/api/projects'),
   createProject: (input: Pick<Project, 'name' | 'description'>) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
-  seeds: async (projectId: number, type: SeedType | "all", status: SeedStatus | "all", priority: SeedPriority | "all"): Promise<SeedListResult> => {
-    const url = "/api/seeds?projectId=" + projectId + "&type=" + type + "&status=" + status + "&priority=" + priority
+  seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[]): Promise<SeedListResult> => {
+    const query = new URLSearchParams({ projectId: String(projectId) })
+    const addFilter = (name: string, values: string[]) => {
+      if (!values.length) query.set(name, '')
+      else values.forEach(value => query.append(name, value))
+    }
+    addFilter('type', types)
+    addFilter('status', statuses)
+    addFilter('priority', priorities)
+    const url = `/api/seeds?${query}`
     const response = await fetch(url)
     if (!response.ok) {
       const body = await response.json().catch(() => ({ error: "请求失败" }))

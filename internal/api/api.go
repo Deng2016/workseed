@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -107,31 +108,27 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "projectId 必填")
 			return
 		}
-		kind := r.URL.Query().Get("type")
-		status := r.URL.Query().Get("status")
-		if status != "" && status != "all" && !contains([]string{"inbox", "doing", "done"}, status) {
+		queryValues := r.URL.Query()
+		kinds, kindsSupplied, err := parseMultiFilter(queryValues, "type", []string{"idea", "feature", "todo", "bug"})
+		if err != nil {
+			problem(w, 400, "无效的种子类型")
+			return
+		}
+		statuses, statusesSupplied, err := parseMultiFilter(queryValues, "status", []string{"inbox", "doing", "done"})
+		if err != nil {
 			problem(w, 400, "无效的状态")
 			return
 		}
-		priority := r.URL.Query().Get("priority")
-		if priority != "" && priority != "all" && !contains([]string{"high", "middle", "low"}, priority) {
+		priorities, prioritiesSupplied, err := parseMultiFilter(queryValues, "priority", []string{"high", "middle", "low"})
+		if err != nil {
 			problem(w, 400, "无效的优先级")
 			return
 		}
 		query := `SELECT ` + seedColumns + ` FROM seeds WHERE project_id = ?`
 		args := []any{projectID}
-		if kind != "" && kind != "all" {
-			query += ` AND type = ?`
-			args = append(args, kind)
-		}
-		if status != "" && status != "all" {
-			query += ` AND status = ?`
-			args = append(args, status)
-		}
-		if priority != "" && priority != "all" {
-			query += ` AND priority = ?`
-			args = append(args, priority)
-		}
+		query, args = appendMultiFilter(query, args, "type", kinds, kindsSupplied)
+		query, args = appendMultiFilter(query, args, "status", statuses, statusesSupplied)
+		query, args = appendMultiFilter(query, args, "priority", priorities, prioritiesSupplied)
 		query += ` ORDER BY created_at DESC, id DESC`
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
@@ -381,6 +378,49 @@ func contains(values []string, value string) bool {
 	}
 	return false
 }
+
+func parseMultiFilter(query url.Values, key string, allowed []string) ([]string, bool, error) {
+	rawValues, supplied := query[key]
+	if !supplied {
+		return nil, false, nil
+	}
+	selected := []string{}
+	seen := map[string]bool{}
+	for _, raw := range rawValues {
+		for _, value := range strings.Split(raw, ",") {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if value == "all" {
+				return nil, false, nil
+			}
+			if !contains(allowed, value) {
+				return nil, true, errors.New("invalid filter value")
+			}
+			if !seen[value] {
+				selected = append(selected, value)
+				seen[value] = true
+			}
+		}
+	}
+	return selected, true, nil
+}
+
+func appendMultiFilter(query string, args []any, column string, selected []string, supplied bool) (string, []any) {
+	if !supplied {
+		return query, args
+	}
+	if len(selected) == 0 {
+		return query + ` AND 1=0`, args
+	}
+	query += ` AND ` + column + ` IN (` + strings.TrimSuffix(strings.Repeat("?,", len(selected)), ",") + `)`
+	for _, value := range selected {
+		args = append(args, value)
+	}
+	return query, args
+}
+
 func decode(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20)).Decode(v)
