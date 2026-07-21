@@ -1,6 +1,7 @@
 /workseed
 web/node_modules/
 web/*.tsbuildinfo
+internal/webui/dist/
 data/
 *.db
 *.db-shm
