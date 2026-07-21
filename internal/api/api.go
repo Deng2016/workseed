@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type server struct{ db *sql.DB }
@@ -38,6 +39,7 @@ func Register(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("/api/projects", s.projects)
 	mux.HandleFunc("/api/seeds", s.seeds)
 	mux.HandleFunc("/api/seeds/", s.seedByID)
+	mux.HandleFunc("/api/worklogs", s.worklogs)
 }
 
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +228,64 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) worklogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	startValue := r.URL.Query().Get("startTime")
+	endValue := r.URL.Query().Get("endTime")
+	startTime, err := parseOptionalTime(startValue)
+	if err != nil {
+		problem(w, http.StatusBadRequest, "无效的开始时间")
+		return
+	}
+	endTime, err := parseOptionalTime(endValue)
+	if err != nil {
+		problem(w, http.StatusBadRequest, "无效的结束时间")
+		return
+	}
+	if startTime != nil && endTime != nil && !startTime.Before(*endTime) {
+		problem(w, http.StatusBadRequest, "开始时间必须早于结束时间")
+		return
+	}
+
+	query := `SELECT ` + seedColumns + ` FROM seeds WHERE completed_at IS NOT NULL`
+	args := []any{}
+	if startTime != nil {
+		query += ` AND unixepoch(completed_at) >= unixepoch(?)`
+		args = append(args, startTime.Format(time.RFC3339))
+	}
+	if endTime != nil {
+		query += ` AND unixepoch(completed_at) < unixepoch(?)`
+		args = append(args, endTime.Format(time.RFC3339))
+	}
+	query += ` ORDER BY completed_at DESC, id DESC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		problem(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	items := []seed{}
+	for rows.Next() {
+		var item seed
+		if err := scanSeed(rows, &item); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		problem(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) error {
 	var total, idea, feature, todo, bug, inbox, doing, done, high, middle, low int
 	err := db.QueryRow(`SELECT COUNT(*),
@@ -285,6 +345,17 @@ func scanSeed(row seedScanner, item *seed) error {
 
 func (s *server) readSeed(id int64, item *seed) error {
 	return scanSeed(s.db.QueryRow(`SELECT `+seedColumns+` FROM seeds WHERE id=?`, id), item)
+}
+
+func parseOptionalTime(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func isProjectNameConflict(err error) bool {

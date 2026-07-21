@@ -3,6 +3,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { api } from './api'
 import type { Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
 
+type Page = 'seeds' | 'worklogs'
+type QuickRange = 'year' | 'month' | 'week' | 'today'
+interface WorklogDay { key: string; label: string; items: Seed[] }
+interface WorklogMonth { key: string; label: string; days: WorklogDay[]; count: number }
+interface WorklogYear { key: string; label: string; months: WorklogMonth[]; count: number }
+
 const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'all', label: '全部类型', icon: '◇' },
   { value: 'idea', label: '灵感', icon: '✦' },
@@ -19,6 +25,13 @@ const priorities: { value: SeedPriority; label: string }[] = [
 
 const projects = ref<Project[]>([])
 const seeds = ref<Seed[]>([])
+const currentPage = ref<Page>(window.location.hash === '#/worklogs' ? 'worklogs' : 'seeds')
+const worklogs = ref<Seed[]>([])
+const worklogBusy = ref(false)
+const collapsedNodes = ref(new Set<string>())
+const initialWorklogRange = quickRangeDates('month')
+const worklogRange = reactive({ start: initialWorklogRange.start, end: initialWorklogRange.end })
+const activeQuickRange = ref<QuickRange | null>('month')
 const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, done: 0, high: 0, middle: 0, low: 0 })
 const counts = ref<SeedCounts>(emptyCounts())
 const projectId = ref<number>(0)
@@ -41,15 +54,40 @@ const currentProject = computed(() => projects.value.find(p => p.id === projectI
 const count = (type: SeedType | 'all') => type === 'all' ? counts.value.total : counts.value[type]
 const statusCount = (status: SeedStatus | 'all') => status === 'all' ? counts.value.total : counts.value[status]
 const priorityCount = (priority: SeedPriority | 'all') => priority === 'all' ? counts.value.total : counts.value[priority]
+const worklogGroups = computed<WorklogYear[]>(() => {
+  const years = new Map<string, { label: string; months: Map<string, { label: string; days: Map<string, WorklogDay> }> }>()
+  for (const item of worklogs.value) {
+    const date = parseStoredTime(item.completedAt)
+    if (!date) continue
+    const yearKey = String(date.getFullYear())
+    const monthNumber = date.getMonth() + 1
+    const monthKey = `${yearKey}-${String(monthNumber).padStart(2, '0')}`
+    const dayKey = `${monthKey}-${String(date.getDate()).padStart(2, '0')}`
+    if (!years.has(yearKey)) years.set(yearKey, { label: `${yearKey}年`, months: new Map() })
+    const year = years.get(yearKey)!
+    if (!year.months.has(monthKey)) year.months.set(monthKey, { label: `${monthNumber}月`, days: new Map() })
+    const month = year.months.get(monthKey)!
+    if (!month.days.has(dayKey)) month.days.set(dayKey, { key: dayKey, label: `${date.getDate()}日`, items: [] })
+    month.days.get(dayKey)!.items.push(item)
+  }
+  return Array.from(years, ([yearKey, year]) => {
+    const months = Array.from(year.months, ([monthKey, month]) => {
+      const days = Array.from(month.days.values())
+      return { key: monthKey, label: month.label, days, count: days.reduce((sum, day) => sum + day.items.length, 0) }
+    })
+    return { key: yearKey, label: year.label, months, count: months.reduce((sum, month) => sum + month.count, 0) }
+  })
+})
 
 async function loadProjects() {
   try {
     projects.value = await api.projects()
     if (!projectId.value && projects.value.length) projectId.value = projects.value[0].id
-    if (!projects.value.length) projectDialog.value = true
+    if (!projects.value.length && currentPage.value === 'seeds') projectDialog.value = true
   } catch (e) { showError(e) }
 }
 async function loadSeeds() {
+  if (currentPage.value !== 'seeds') return
   if (!projectId.value) { seeds.value = []; counts.value = emptyCounts(); return }
   busy.value = true
   try {
@@ -58,6 +96,19 @@ async function loadSeeds() {
     counts.value = result.counts
   } catch (e) { showError(e) }
   finally { busy.value = false }
+}
+async function loadWorklogs() {
+  if (!worklogRange.start || !worklogRange.end) return
+  const start = new Date(`${worklogRange.start}T00:00:00`)
+  const end = new Date(`${worklogRange.end}T00:00:00`)
+  if (start > end) { showError('开始时间不能晚于结束时间'); return }
+  end.setDate(end.getDate() + 1)
+  worklogBusy.value = true
+  try {
+    worklogs.value = await api.worklogs(start.toISOString(), end.toISOString())
+    collapsedNodes.value = new Set()
+  } catch (e) { showError(e) }
+  finally { worklogBusy.value = false }
 }
 async function createProject() {
   if (!projectForm.name.trim()) return
@@ -136,11 +187,17 @@ async function removeSeed(id: number) {
 function showError(value: unknown) { error.value = value instanceof Error ? value.message : '操作失败'; window.setTimeout(() => error.value = '', 3000) }
 function typeInfo(value: SeedType) { return types.find(t => t.value === value)! }
 function statusLabel(value: SeedStatus) { return statuses.find(s => s.value === value)?.label }
-function formatTime(value?: string | null) {
-  if (!value) return '—'
+function projectName(id: number) { return projects.value.find(project => project.id === id)?.name ?? '未知项目' }
+function parseStoredTime(value?: string | null) {
+  if (!value) return null
   const normalized = value.includes('T') ? value : value.replace(' ', 'T') + 'Z'
   const date = new Date(normalized)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+  return Number.isNaN(date.getTime()) ? null : date
+}
+function formatTime(value?: string | null) {
+  if (!value) return '—'
+  const date = parseStoredTime(value)
+  return date ? date.toLocaleString('zh-CN', { hour12: false }) : value
 }
 function formatDuration(value?: number | null) {
   if (value == null) return '—'
@@ -155,6 +212,51 @@ function formatDuration(value?: number | null) {
   if (!parts.length || seconds) parts.push(`${seconds}秒`)
   return parts.join(' ')
 }
+function formatDateInput(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+function quickRangeDates(range: QuickRange) {
+  const now = new Date()
+  let start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  let end = new Date(start)
+  if (range === 'year') {
+    start = new Date(now.getFullYear(), 0, 1)
+    end = new Date(now.getFullYear(), 11, 31)
+  } else if (range === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1)
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+  } else if (range === 'week') {
+    const offsetFromMonday = (now.getDay() + 6) % 7
+    start.setDate(start.getDate() - offsetFromMonday)
+    end = new Date(start)
+    end.setDate(end.getDate() + 6)
+  }
+  return { start: formatDateInput(start), end: formatDateInput(end) }
+}
+function applyQuickRange(range: QuickRange) {
+  Object.assign(worklogRange, quickRangeDates(range))
+  activeQuickRange.value = range
+  loadWorklogs()
+}
+function useCustomRange() { activeQuickRange.value = null }
+function toggleNode(key: string) {
+  const next = new Set(collapsedNodes.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedNodes.value = next
+}
+function isCollapsed(key: string) { return collapsedNodes.value.has(key) }
+function syncPageFromHash() {
+  currentPage.value = window.location.hash === '#/worklogs' ? 'worklogs' : 'seeds'
+  projectDialog.value = false
+  seedDialog.value = false
+  if (currentPage.value === 'worklogs') loadWorklogs()
+  else if (projectId.value) loadSeeds()
+  else if (!projects.value.length) projectDialog.value = true
+}
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape') return
@@ -165,18 +267,21 @@ function handleKeydown(event: KeyboardEvent) {
 watch([projectId, filter, statusFilter, priorityFilter], loadSeeds)
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
+  window.addEventListener('hashchange', syncPageFromHash)
   loadProjects()
+  if (currentPage.value === 'worklogs') loadWorklogs()
 })
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('hashchange', syncPageFromHash)
   window.clearTimeout(copyFeedbackTimer)
 })
 </script>
 
 <template>
-  <main class="shell">
+  <main v-if="currentPage === 'seeds'" class="shell">
     <header class="topbar">
-      <div class="brand"><img class="brand-mark" src="/favicon.png" alt="" /><div><strong>拾种</strong><small>WORKSEED</small></div><span class="brand-tagline">把工作中的每个念头，都安放在这里。</span></div>
+      <div class="brand"><a class="brand-link" href="#/worklogs" title="查看工作日志"><img class="brand-mark" src="/favicon.png" alt="" /><span><strong>拾种</strong><small>WORKSEED</small></span></a><span class="brand-tagline">把工作中的每个念头，都安放在这里。</span></div>
       <div class="project-picker">
         <span class="label">当前项目</span>
         <select v-model="projectId"><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select>
@@ -235,11 +340,63 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
-  <div v-if="projectDialog" class="overlay" @click.self="projectDialog = false">
+  <main v-else class="shell worklog-page">
+    <header class="topbar">
+      <div class="brand"><a class="brand-link" href="#/worklogs"><img class="brand-mark" src="/favicon.png" alt="" /><span><strong>拾种</strong><small>WORKSEED</small></span></a><span class="brand-tagline">工作日志</span></div>
+      <a class="quiet nav-link" href="#/">返回种子列表</a>
+    </header>
+
+    <section class="worklog-shell">
+      <div class="worklog-heading">
+        <div><p class="eyebrow">WORK JOURNAL</p><h1>工作日志</h1></div>
+        <p>按完成时间回看已经落地的工作。</p>
+      </div>
+
+      <form class="worklog-filters" @submit.prevent="loadWorklogs">
+        <label>开始时间<input v-model="worklogRange.start" type="date" required @input="useCustomRange" /></label>
+        <span class="range-separator">—</span>
+        <label>结束时间<input v-model="worklogRange.end" type="date" required @input="useCustomRange" /></label>
+        <div class="quick-ranges" aria-label="快捷查询">
+          <button type="button" :class="{ active: activeQuickRange === 'year' }" @click="applyQuickRange('year')">本年</button>
+          <button type="button" :class="{ active: activeQuickRange === 'month' }" @click="applyQuickRange('month')">本月</button>
+          <button type="button" :class="{ active: activeQuickRange === 'week' }" @click="applyQuickRange('week')">本周</button>
+          <button type="button" :class="{ active: activeQuickRange === 'today' }" @click="applyQuickRange('today')">当天</button>
+        </div>
+        <button class="primary worklog-search" :disabled="worklogBusy">查询</button>
+      </form>
+
+      <div class="worklog-summary" aria-live="polite">共找到 <strong>{{ worklogs.length }}</strong> 条已完成工作</div>
+      <p v-if="worklogBusy" class="empty">正在整理工作日志……</p>
+      <div v-else-if="!worklogs.length" class="empty"><b>这段时间还没有工作日志</b><span>完成一颗种子后，它会出现在这里。</span></div>
+      <section v-else class="worklog-tree">
+        <div v-for="year in worklogGroups" :key="year.key" class="worklog-year">
+          <button class="tree-node year-node" type="button" :aria-expanded="!isCollapsed(year.key)" @click="toggleNode(year.key)"><span class="tree-arrow" :class="{ collapsed: isCollapsed(year.key) }">⌄</span><strong>{{ year.label }}</strong><em>{{ year.count }} 项</em></button>
+          <div v-if="!isCollapsed(year.key)" class="year-children">
+            <div v-for="month in year.months" :key="month.key" class="worklog-month">
+              <button class="tree-node month-node" type="button" :aria-expanded="!isCollapsed(month.key)" @click="toggleNode(month.key)"><span class="tree-arrow" :class="{ collapsed: isCollapsed(month.key) }">⌄</span><strong>{{ month.label }}</strong><em>{{ month.count }} 项</em></button>
+              <div v-if="!isCollapsed(month.key)" class="month-children">
+                <div v-for="day in month.days" :key="day.key" class="worklog-day">
+                  <button class="tree-node day-node" type="button" :aria-expanded="!isCollapsed(day.key)" @click="toggleNode(day.key)"><span class="tree-arrow" :class="{ collapsed: isCollapsed(day.key) }">⌄</span><strong>{{ day.label }}</strong><em>{{ day.items.length }} 项</em></button>
+                  <div v-if="!isCollapsed(day.key)" class="day-children">
+                    <article v-for="item in day.items" :key="item.id" class="worklog-item">
+                      <div class="worklog-item-meta"><span>{{ projectName(item.projectId) }}</span><span>{{ typeInfo(item.type).label }}</span><time>{{ formatTime(item.completedAt) }}</time><span v-if="item.durationSeconds != null">耗时 {{ formatDuration(item.durationSeconds) }}</span></div>
+                      <h2>{{ item.title }}</h2>
+                    </article>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div v-if="currentPage === 'seeds' && projectDialog" class="overlay" @click.self="projectDialog = false">
     <form class="dialog" @submit.prevent="createProject"><button type="button" class="close" @click="projectDialog = false">×</button><p class="eyebrow">新的苗圃</p><h2>创建项目</h2><label>项目名称<input v-model="projectForm.name" autofocus placeholder="例如：Workseed" /></label><label>简单描述<textarea v-model="projectForm.description" rows="3" placeholder="这个项目在做什么？"></textarea></label><div class="actions"><button type="button" class="quiet" @click="projectDialog = false">取消</button><button class="primary">创建项目</button></div></form>
   </div>
 
-  <div v-if="seedDialog" class="overlay" @click.self="seedDialog = false">
+  <div v-if="currentPage === 'seeds' && seedDialog" class="overlay" @click.self="seedDialog = false">
     <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>开始时间<strong>{{ formatTime(editingSeed.startedAt) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span><span>耗时<strong>{{ formatDuration(editingSeed.durationSeconds) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
   </div>
   <div v-if="error" class="toast">{{ error }}</div>

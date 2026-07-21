@@ -158,6 +158,51 @@ func TestSeedsAreOrderedByCreationTimeDescending(t *testing.T) {
 	}
 }
 
+func TestWorklogsFilterByCompletionTime(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('日志项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, completed_at) VALUES
+		(?, 'todo', 'done', '范围之前', 'middle', '2026-06-30 23:59:59'),
+		(?, 'feature', 'done', '七月较早', 'high', '2026-07-01 00:00:00'),
+		(?, 'bug', 'done', '七月较晚', 'high', '2026-07-31 23:59:59'),
+		(?, 'todo', 'done', '范围之后', 'low', '2026-08-01 00:00:00')`, projectID, projectID, projectID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/worklogs?startTime=2026-07-01T00:00:00Z&endTime=2026-08-01T00:00:00Z", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var items []seed
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Title != "七月较晚" || items[1].Title != "七月较早" {
+		t.Fatalf("filtered worklogs = %#v", items)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/worklogs?startTime=not-a-time", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid range status = %d, want 400", recorder.Code)
+	}
+}
+
 func seedRequest(t *testing.T, handler http.Handler, method, path string, input seed, wantStatus int) seed {
 	t.Helper()
 	body, err := json.Marshal(input)

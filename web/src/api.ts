@@ -37,4 +37,8 @@ export const api = {
   updateSeed: (seed: Seed) =>
     request<Seed>(`/api/seeds/${seed.id}`, { method: 'PATCH', body: JSON.stringify(seed) }),
   deleteSeed: (id: number) => request<void>(`/api/seeds/${id}`, { method: 'DELETE' }),
+  worklogs: (startTime: string, endTime: string) => {
+    const query = new URLSearchParams({ startTime, endTime })
+    return request<Seed[]>(`/api/worklogs?${query}`)
+  },
 }
