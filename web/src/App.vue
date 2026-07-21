@@ -125,7 +125,7 @@ async function createProject() {
 function openSeed(seed?: Seed) {
   editingId.value = seed?.id ?? null
   editingSeed.value = seed ?? null
-  seedForm.type = seed?.type ?? filter.value[0] ?? 'todo'
+  seedForm.type = seed?.type ?? 'todo'
   seedForm.status = seed?.status ?? 'inbox'
   seedForm.title = seed?.title ?? ''
   seedForm.content = seed?.content ?? ''
