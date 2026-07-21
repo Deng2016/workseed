@@ -123,6 +123,7 @@ cp -a ./data ./data-backup
 | `PATCH` | `/api/seeds/{id}` | 更新种子 |
 | `DELETE` | `/api/seeds/{id}` | 删除种子 |
 | `GET` | `/api/worklogs?startTime=...&endTime=...` | 按完成时间获取工作日志 |
+| `GET` | `/api/version` | 获取当前程序版本 |
 
 创建项目示例：
 
@@ -151,6 +152,8 @@ cp -a ./data ./data-backup
 种子列表按 `createdAt` 倒序返回。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时计算耗时。状态可在 `inbox`、`doing`、`done` 之间自由切换。
 
 工作日志接口按 `completedAt` 倒序返回所有项目中已记录完成时间的种子。`startTime` 和 `endTime` 使用 RFC 3339 格式；开始时间包含在结果中，结束时间作为不包含的上界。两个参数均可省略。
+
+版本号由 Go 构建时自动写入的最后一次 Git 提交 ID 和提交时间生成，格式为 `<7位提交ID>_yyyyMMddHHmm`，其中时间使用 UTC，例如 `07b9a39_202607210344`。无法获取 Git 构建信息时版本为 `dev`。
 
 ## 项目结构
 

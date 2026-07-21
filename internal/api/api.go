@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	buildversion "workseed/internal/version"
 )
 
 type server struct{ db *sql.DB }
@@ -40,6 +42,15 @@ func Register(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("/api/seeds", s.seeds)
 	mux.HandleFunc("/api/seeds/", s.seedByID)
 	mux.HandleFunc("/api/worklogs", s.worklogs)
+	mux.HandleFunc("/api/version", appVersion)
+}
+
+func appVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"version": buildversion.Current()})
 }
 
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {

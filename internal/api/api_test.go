@@ -203,6 +203,22 @@ func TestWorklogsFilterByCompletionTime(t *testing.T) {
 	}
 }
 
+func TestAppVersion(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/version", nil)
+	appVersion(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var output map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
+		t.Fatal(err)
+	}
+	if output["version"] == "" {
+		t.Fatal("version is empty")
+	}
+}
+
 func seedRequest(t *testing.T, handler http.Handler, method, path string, input seed, wantStatus int) seed {
 	t.Helper()
 	body, err := json.Marshal(input)

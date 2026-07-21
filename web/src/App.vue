@@ -25,6 +25,7 @@ const priorities: { value: SeedPriority; label: string }[] = [
 
 const projects = ref<Project[]>([])
 const seeds = ref<Seed[]>([])
+const appVersion = ref('')
 const currentPage = ref<Page>(window.location.hash === '#/worklogs' ? 'worklogs' : 'seeds')
 const worklogs = ref<Seed[]>([])
 const worklogBusy = ref(false)
@@ -85,6 +86,9 @@ async function loadProjects() {
     if (!projectId.value && projects.value.length) projectId.value = projects.value[0].id
     if (!projects.value.length && currentPage.value === 'seeds') projectDialog.value = true
   } catch (e) { showError(e) }
+}
+async function loadVersion() {
+  try { appVersion.value = (await api.version()).version } catch { /* 版本信息不影响主功能 */ }
 }
 async function loadSeeds() {
   if (currentPage.value !== 'seeds') return
@@ -268,6 +272,7 @@ watch([projectId, filter, statusFilter, priorityFilter], loadSeeds)
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('hashchange', syncPageFromHash)
+  loadVersion()
   loadProjects()
   if (currentPage.value === 'worklogs') loadWorklogs()
 })
@@ -338,6 +343,7 @@ onBeforeUnmount(() => {
         <button class="icon-button" title="删除" @click.stop="removeSeed(seed.id)">×</button>
       </article>
     </section>
+    <footer v-if="appVersion" class="app-version" title="当前版本">版本 {{ appVersion }}</footer>
   </main>
 
   <main v-else class="shell worklog-page">
