@@ -1042,6 +1042,16 @@ textarea:focus {
     border: 1px solid #e1e1da;
     border-radius: 10px;
     background: #fff;
+    cursor: pointer;
+    transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+
+.worklog-item:hover,
+.worklog-item:focus-visible {
+    border-color: #aebdaf;
+    box-shadow: 0 8px 24px #315f4512;
+    transform: translateY(-1px);
+    outline: none;
 }
 
 .worklog-item-meta {

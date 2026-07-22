@@ -245,7 +245,9 @@ async function saveSeed() {
   try {
     if (editingId.value) await api.updateSeed(value)
     else await api.createSeed(value)
-    seedDialog.value = false; await loadSeeds()
+    seedDialog.value = false
+    if (currentPage.value === 'worklogs') await loadWorklogs()
+    else await loadSeeds()
   } catch (e) { showError(e) }
 }
 async function updateSeedMeta(seed: Seed, field: "type" | "status" | "priority", event: Event) {
@@ -538,7 +540,7 @@ onBeforeUnmount(() => {
                 <div v-for="day in month.days" :key="day.key" class="worklog-day">
                   <button class="tree-node day-node" type="button" :aria-expanded="!isCollapsed(day.key)" @click="toggleNode(day.key)"><span class="tree-arrow" :class="{ collapsed: isCollapsed(day.key) }">⌄</span><strong>{{ day.label }}</strong><em>{{ day.items.length }} 项</em></button>
                   <div v-if="!isCollapsed(day.key)" class="day-children">
-                    <article v-for="item in day.items" :key="item.id" class="worklog-item">
+                    <article v-for="item in day.items" :key="item.id" class="worklog-item" role="button" tabindex="0" @click="openSeed(item)" @keydown.enter="openSeed(item)" @keydown.space.prevent="openSeed(item)">
                       <div class="worklog-item-meta"><span>{{ projectName(item.projectId) }}</span><span>{{ typeInfo(item.type).label }}</span><time>{{ formatTime(item.completedAt) }}</time><span v-if="item.durationSeconds != null">耗时 {{ formatDuration(item.durationSeconds) }}</span></div>
                       <h2>{{ item.title }}</h2>
                     </article>
@@ -589,7 +591,7 @@ onBeforeUnmount(() => {
     <form class="dialog" @submit.prevent="createProject"><button type="button" class="close" @click="projectDialog = false">×</button><p class="eyebrow">新的苗圃</p><h2>创建项目</h2><label>项目名称<input v-model="projectForm.name" autofocus placeholder="例如：Workseed" /></label><label>简单描述<textarea v-model="projectForm.description" rows="3" placeholder="这个项目在做什么？"></textarea></label><div class="actions"><button type="button" class="quiet" @click="projectDialog = false">取消</button><button class="primary">创建项目</button></div></form>
   </div>
 
-  <div v-if="currentPage === 'seeds' && seedDialog" class="overlay" @click.self="seedDialog = false">
+  <div v-if="currentPage !== 'settings' && seedDialog" class="overlay" @click.self="seedDialog = false">
     <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><label v-if="editingSeed">事种编号<input :value="editingSeed.id" readonly /></label><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>开始时间<strong>{{ formatTime(editingSeed.startedAt) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span><span>耗时<strong>{{ formatDuration(editingSeed.durationSeconds) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
   </div>
   <div v-if="error" class="toast">{{ error }}</div>
