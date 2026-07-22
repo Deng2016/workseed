@@ -52,7 +52,7 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTools := []string{"complete_seed", "list_seeds", "skip_seed", "start_seed"}
+	wantTools := []string{"complete_seed", "get_seed", "list_seeds", "skip_seed", "start_seed"}
 	if len(tools.Tools) != len(wantTools) {
 		t.Fatalf("tools = %#v", tools.Tools)
 	}
@@ -80,11 +80,34 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 
 	highPriorityID := listed.Items[0].ID
+	getResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
+	var fetched seedOutput
+	decodeStructured(t, getResult.StructuredContent, &fetched)
+	if fetched.ID != highPriorityID || fetched.ProjectID != secondProjectID || fetched.Status != "inbox" {
+		t.Fatalf("fetched seed = %#v", fetched)
+	}
+
+	missingSeed, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "get_seed", Arguments: map[string]any{"seedId": int64(999999)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !missingSeed.IsError {
+		t.Fatal("getting a missing seed unexpectedly succeeded")
+	}
+
 	startResult := callTool(t, session, "start_seed", map[string]any{"seedId": highPriorityID})
 	var started transitionOutput
 	decodeStructured(t, startResult.StructuredContent, &started)
 	if started.Seed.Status != "doing" || started.Seed.StartedAt == nil {
 		t.Fatalf("started seed = %#v", started.Seed)
+	}
+	doingResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
+	var fetchedDoing seedOutput
+	decodeStructured(t, doingResult.StructuredContent, &fetchedDoing)
+	if fetchedDoing.Status != "doing" || fetchedDoing.StartedAt == nil {
+		t.Fatalf("fetched doing seed = %#v", fetchedDoing)
 	}
 
 	duplicateStart, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -108,6 +131,12 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != 120 {
 		t.Fatalf("duration = %v, want 120", completed.Seed.DurationSeconds)
+	}
+	doneResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
+	var fetchedDone seedOutput
+	decodeStructured(t, doneResult.StructuredContent, &fetchedDone)
+	if fetchedDone.Status != "done" || fetchedDone.CompletedAt == nil {
+		t.Fatalf("fetched done seed = %#v", fetchedDone)
 	}
 
 	completeInbox, err := session.CallTool(context.Background(), &mcp.CallToolParams{

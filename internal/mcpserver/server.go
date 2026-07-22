@@ -25,7 +25,7 @@ type listSeedsInput struct {
 }
 
 type seedIDInput struct {
-	SeedID int64 `json:"seedId" jsonschema:"要处理的事种 ID"`
+	SeedID int64 `json:"seedId" jsonschema:"事种 ID"`
 }
 
 type seedOutput struct {
@@ -58,7 +58,7 @@ type transitionOutput struct {
 func Handler(db *sql.DB) http.Handler {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "workseed", Version: buildversion.Current()},
-		&mcp.ServerOptions{Instructions: "先调用 list_seeds 按优先级获取待处理事种。处理前调用 start_seed；工作完成后调用 complete_seed；条件不完整或处理失败时调用 skip_seed。不要处理未成功进入 doing 状态的事种。"},
+		&mcp.ServerOptions{Instructions: "先调用 list_seeds 按优先级获取待处理事种。处理前调用 start_seed；工作完成后调用 complete_seed；条件不完整或处理失败时调用 skip_seed。工具结果不确定时调用 get_seed 精确确认状态。不要处理未成功进入 doing 状态的事种。"},
 	)
 
 	closedWorld := false
@@ -77,6 +77,22 @@ func Handler(db *sql.DB) http.Handler {
 			return nil, listSeedsOutput{}, err
 		}
 		return nil, listSeedsOutput{Items: items, Count: len(items)}, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_seed",
+		Description: "按 ID 获取一条事种的最新信息。用于精确确认项目归属和当前状态。",
+		Annotations: &mcp.ToolAnnotations{
+			Title:         "获取事种详情",
+			ReadOnlyHint:  true,
+			OpenWorldHint: &closedWorld,
+		},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seedIDInput) (*mcp.CallToolResult, seedOutput, error) {
+		item, err := getSeed(ctx, db, input.SeedID)
+		if err != nil {
+			return nil, seedOutput{}, err
+		}
+		return nil, item, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -186,6 +202,22 @@ func listSeeds(ctx context.Context, db *sql.DB, input listSeedsInput) ([]seedOut
 		return nil, err
 	}
 	return items, nil
+}
+
+func getSeed(ctx context.Context, db *sql.DB, seedID int64) (seedOutput, error) {
+	if seedID < 1 {
+		return seedOutput{}, errors.New("seedId 必须是正整数")
+	}
+	var item seedOutput
+	err := scanSeed(db.QueryRowContext(ctx, `SELECT `+seedColumns+`
+		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, seedID), &item)
+	if errors.Is(err, sql.ErrNoRows) {
+		return seedOutput{}, fmt.Errorf("事种 %d 不存在", seedID)
+	}
+	if err != nil {
+		return seedOutput{}, err
+	}
+	return item, nil
 }
 
 func transitionSeed(ctx context.Context, db *sql.DB, seedID int64, fromStatus, toStatus string) (seedOutput, error) {

@@ -184,6 +184,7 @@ MCP 服务提供以下工具：
 | 工具 | 作用 |
 | --- | --- |
 | `list_seeds` | 按高、中、低优先级列出事种；默认只返回 `inbox`，可传 `projectId`、`status` 和 `limit`，状态支持 `inbox`、`doing`、`paused`、`skipped`、`done`、`all` |
+| `get_seed` | 按 `seedId` 获取一条事种的最新信息，用于精确确认项目归属和当前状态 |
 | `start_seed` | 原子领取 `inbox` 事种，将其改为 `doing` 并记录开始时间；重复领取会失败 |
 | `complete_seed` | 将 `doing` 事种改为 `done`，记录完成时间并计算耗时 |
 | `skip_seed` | 将 `inbox`、`doing` 或 `paused` 事种标记为 `skipped`；重复调用保持成功，已完成事种不能跳过 |
@@ -192,8 +193,9 @@ MCP 服务提供以下工具：
 
 1. 调用 `list_seeds` 获取事种，选择返回列表中的第一条开始处理。
 2. 条件不完整时调用 `skip_seed` 并继续下一条；否则调用 `start_seed`，只有调用成功后才实际执行工作。
-3. 完成工作后调用 `complete_seed`；多次尝试仍失败时调用 `skip_seed`。
-4. 重复以上步骤，直到 `list_seeds` 返回空列表。
+3. 工具调用结果不确定时调用 `get_seed` 精确确认状态，避免依赖可能截断的列表结果。
+4. 完成工作后调用 `complete_seed`；多次尝试仍失败时调用 `skip_seed`。
+5. 重复以上步骤，直到 `list_seeds` 返回空列表。
 
 版本号由 Go 构建时自动写入的最后一次 Git 提交 ID 和提交时间生成，格式为 `<7位提交ID>_yyyyMMddHHmm`，其中时间使用 UTC，例如 `07b9a39_202607210344`。无法获取 Git 构建信息时版本为 `dev`。
 
