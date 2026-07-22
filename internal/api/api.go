@@ -13,6 +13,7 @@ import (
 
 	"workseed/internal/mcpserver"
 	buildversion "workseed/internal/version"
+	"workseed/internal/worktime"
 )
 
 type server struct{ db *sql.DB }
@@ -250,12 +251,23 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, err.Error())
 			return
 		}
-		_, err = s.db.Exec(`UPDATE seeds SET
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
+		defer tx.Rollback()
+		var previousStatus string
+		if err := tx.QueryRowContext(r.Context(), `SELECT status FROM seeds WHERE id=?`, id).Scan(&previousStatus); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
+		_, err = tx.ExecContext(r.Context(), `UPDATE seeds SET
 			type=?,
 			started_at=CASE WHEN ?='doing' AND status<>'doing' THEN CURRENT_TIMESTAMP ELSE started_at END,
 			completed_at=CASE WHEN ?='done' AND status<>'done' THEN CURRENT_TIMESTAMP WHEN ?<>'done' THEN NULL ELSE completed_at END,
 			duration_seconds=CASE
-				WHEN ?='done' AND status<>'done' AND started_at IS NOT NULL THEN MAX(0, unixepoch(CURRENT_TIMESTAMP)-unixepoch(started_at))
+				WHEN ?='done' AND status<>'done' THEN NULL
 				WHEN ?<>'done' THEN NULL
 				ELSE duration_seconds
 			END,
@@ -276,7 +288,29 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 			problem(w, 500, err.Error())
 			return
 		}
-		if err := s.readSeed(id, &in); err != nil {
+		if in.Status == "done" && previousStatus != "done" {
+			var startedAt, completedAt *string
+			if err := tx.QueryRowContext(r.Context(), `SELECT started_at, completed_at FROM seeds WHERE id=?`, id).Scan(&startedAt, &completedAt); err != nil {
+				problem(w, 500, err.Error())
+				return
+			}
+			if startedAt != nil && completedAt != nil {
+				duration, err := worktime.DurationSeconds(*startedAt, *completedAt)
+				if err != nil {
+					problem(w, 500, err.Error())
+					return
+				}
+				if _, err := tx.ExecContext(r.Context(), `UPDATE seeds SET duration_seconds=? WHERE id=?`, duration, id); err != nil {
+					problem(w, 500, err.Error())
+					return
+				}
+			}
+		}
+		if err := scanSeed(tx.QueryRowContext(r.Context(), `SELECT `+seedColumns+` FROM seeds WHERE id=?`, id), &in); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
+		if err := tx.Commit(); err != nil {
 			problem(w, 500, err.Error())
 			return
 		}

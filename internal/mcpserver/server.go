@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	buildversion "workseed/internal/version"
+	"workseed/internal/worktime"
 )
 
 const (
@@ -306,14 +307,26 @@ func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOu
 		return seedOutput{}, fmt.Errorf("事种 %d 不属于当前 claimToken", input.SeedID)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'done', completed_at = CURRENT_TIMESTAMP,
-		duration_seconds = CASE WHEN started_at IS NOT NULL
-			THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END,
+		duration_seconds = NULL,
 		updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'doing' AND claim_token = ?`, input.SeedID, claimToken)
 	if err != nil {
 		return seedOutput{}, err
 	}
 	if err := requireSingleRow(result, input.SeedID); err != nil {
 		return seedOutput{}, err
+	}
+	var startedAt, completedAt *string
+	if err := tx.QueryRowContext(ctx, `SELECT started_at, completed_at FROM seeds WHERE id = ?`, input.SeedID).Scan(&startedAt, &completedAt); err != nil {
+		return seedOutput{}, err
+	}
+	if startedAt != nil && completedAt != nil {
+		duration, err := worktime.DurationSeconds(*startedAt, *completedAt)
+		if err != nil {
+			return seedOutput{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE seeds SET duration_seconds = ? WHERE id = ?`, duration, input.SeedID); err != nil {
+			return seedOutput{}, err
+		}
 	}
 	return commitSeedRead(ctx, tx, input.SeedID)
 }

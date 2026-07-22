@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"workseed/internal/store"
+	"workseed/internal/worktime"
 )
 
 func TestMCPAgentSeedWorkflow(t *testing.T) {
@@ -135,8 +136,12 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if completed.Seed.Status != "done" || completed.Seed.CompletedAt == nil {
 		t.Fatalf("completed seed = %#v", completed.Seed)
 	}
-	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != 120 {
-		t.Fatalf("duration = %v, want 120", completed.Seed.DurationSeconds)
+	wantDuration, err := worktime.DurationSeconds(*completed.Seed.StartedAt, *completed.Seed.CompletedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != wantDuration {
+		t.Fatalf("duration = %v, want %d", completed.Seed.DurationSeconds, wantDuration)
 	}
 	duplicateComplete := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var completedAgain transitionOutput

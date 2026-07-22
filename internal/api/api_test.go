@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"workseed/internal/store"
+	"workseed/internal/worktime"
 )
 
 func TestSeedStatusTimestampsAndDuration(t *testing.T) {
@@ -76,8 +77,12 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	if stepByStep.CompletedAt == nil {
 		t.Fatal("entering done did not record a completion time")
 	}
-	if stepByStep.DurationSec == nil || *stepByStep.DurationSec != 3661 {
-		t.Fatalf("duration = %v, want 3661 seconds", stepByStep.DurationSec)
+	wantDuration, err := worktime.DurationSeconds(*stepByStep.StartedAt, *stepByStep.CompletedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stepByStep.DurationSec == nil || *stepByStep.DurationSec != wantDuration {
+		t.Fatalf("duration = %v, want %d seconds", stepByStep.DurationSec, wantDuration)
 	}
 	var retainedClaimToken *string
 	if err := db.QueryRow(`SELECT claim_token FROM seeds WHERE id=?`, stepByStep.ID).Scan(&retainedClaimToken); err != nil {
