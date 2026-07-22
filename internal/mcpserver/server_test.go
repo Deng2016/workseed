@@ -52,7 +52,7 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTools := []string{"complete_seed", "list_seeds", "start_seed"}
+	wantTools := []string{"complete_seed", "list_seeds", "skip_seed", "start_seed"}
 	if len(tools.Tools) != len(wantTools) {
 		t.Fatalf("tools = %#v", tools.Tools)
 	}
@@ -118,6 +118,29 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 	if !completeInbox.IsError {
 		t.Fatal("completing an inbox seed unexpectedly succeeded")
+	}
+
+	skipInboxResult := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[1].ID})
+	var skippedInbox transitionOutput
+	decodeStructured(t, skipInboxResult.StructuredContent, &skippedInbox)
+	if skippedInbox.Seed.Status != "skipped" || skippedInbox.Seed.CompletedAt != nil {
+		t.Fatalf("skipped inbox seed = %#v", skippedInbox.Seed)
+	}
+	duplicateSkip := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[1].ID})
+	var skippedAgain transitionOutput
+	decodeStructured(t, duplicateSkip.StructuredContent, &skippedAgain)
+	if skippedAgain.Seed.Status != "skipped" {
+		t.Fatalf("idempotent skip seed = %#v", skippedAgain.Seed)
+	}
+
+	startLow := callTool(t, session, "start_seed", map[string]any{"seedId": listed.Items[2].ID})
+	var doingLow transitionOutput
+	decodeStructured(t, startLow.StructuredContent, &doingLow)
+	skipDoingResult := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[2].ID})
+	var skippedDoing transitionOutput
+	decodeStructured(t, skipDoingResult.StructuredContent, &skippedDoing)
+	if skippedDoing.Seed.Status != "skipped" || skippedDoing.Seed.StartedAt == nil {
+		t.Fatalf("skipped doing seed = %#v", skippedDoing.Seed)
 	}
 }
 

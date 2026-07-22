@@ -44,6 +44,8 @@ func migrateSeedSchema(db *sql.DB) error {
 	}
 	isFinalSchema := strings.Contains(definition, "priority TEXT") &&
 		strings.Contains(definition, "'doing'") &&
+		strings.Contains(definition, "'paused'") &&
+		strings.Contains(definition, "'skipped'") &&
 		strings.Contains(definition, "started_at TEXT") &&
 		strings.Contains(definition, "duration_seconds INTEGER") &&
 		!strings.Contains(definition, "'planned'") &&
@@ -77,7 +79,7 @@ CREATE TABLE seeds (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES seeds(id) ON DELETE SET NULL,
   type TEXT NOT NULL CHECK (type IN ('idea', 'feature', 'todo', 'bug')),
-  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'done')),
+  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'paused', 'skipped', 'done')),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'middle' CHECK (priority IN ('high', 'middle', 'low')),
@@ -91,7 +93,7 @@ CREATE TABLE seeds (
 INSERT INTO seeds(id, project_id, parent_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds)
 SELECT
   id, project_id, parent_id, type,
-  CASE status WHEN 'doing' THEN 'doing' WHEN 'done' THEN 'done' ELSE 'inbox' END,
+  CASE WHEN status IN ('doing', 'paused', 'skipped', 'done') THEN status ELSE 'inbox' END,
   title, content,
   CASE
     WHEN status IN ('archived', 'someday') THEN 'low'
@@ -125,7 +127,7 @@ CREATE TABLE IF NOT EXISTS seeds (
   project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   parent_id INTEGER REFERENCES seeds(id) ON DELETE SET NULL,
   type TEXT NOT NULL CHECK (type IN ('idea', 'feature', 'todo', 'bug')),
-  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'done')),
+  status TEXT NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'doing', 'paused', 'skipped', 'done')),
   title TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '',
   priority TEXT NOT NULL DEFAULT 'middle' CHECK (priority IN ('high', 'middle', 'low')),

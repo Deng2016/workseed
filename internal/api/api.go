@@ -137,7 +137,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "无效的种子类型")
 			return
 		}
-		statuses, statusesSupplied, err := parseMultiFilter(queryValues, "status", []string{"inbox", "doing", "done"})
+		statuses, statusesSupplied, err := parseMultiFilter(queryValues, "status", []string{"inbox", "doing", "paused", "skipped", "done"})
 		if err != nil {
 			problem(w, 400, "无效的状态")
 			return
@@ -340,11 +340,12 @@ func (s *server) worklogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) error {
-	var total, idea, feature, todo, bug, inbox, doing, done, high, middle, low int
+	var total, idea, feature, todo, bug, inbox, doing, paused, skipped, done, high, middle, low int
 	query := `SELECT COUNT(*),
 		COALESCE(SUM(type = 'idea'), 0), COALESCE(SUM(type = 'feature'), 0),
 		COALESCE(SUM(type = 'todo'), 0), COALESCE(SUM(type = 'bug'), 0),
-		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'doing'), 0), COALESCE(SUM(status = 'done'), 0),
+		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'doing'), 0),
+		COALESCE(SUM(status = 'paused'), 0), COALESCE(SUM(status = 'skipped'), 0), COALESCE(SUM(status = 'done'), 0),
 		COALESCE(SUM(priority = 'high'), 0), COALESCE(SUM(priority = 'middle'), 0),
 		COALESCE(SUM(priority = 'low'), 0) FROM seeds`
 	args := []any{}
@@ -353,11 +354,11 @@ func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) e
 		args = append(args, projectID)
 	}
 	err := db.QueryRow(query, args...).
-		Scan(&total, &idea, &feature, &todo, &bug, &inbox, &doing, &done, &high, &middle, &low)
+		Scan(&total, &idea, &feature, &todo, &bug, &inbox, &doing, &paused, &skipped, &done, &high, &middle, &low)
 	if err != nil {
 		return err
 	}
-	values := map[string]int{"Total": total, "Idea": idea, "Feature": feature, "Todo": todo, "Bug": bug, "Inbox": inbox, "Doing": doing, "Done": done, "High": high, "Middle": middle, "Low": low}
+	values := map[string]int{"Total": total, "Idea": idea, "Feature": feature, "Todo": todo, "Bug": bug, "Inbox": inbox, "Doing": doing, "Paused": paused, "Skipped": skipped, "Done": done, "High": high, "Middle": middle, "Low": low}
 	for name, value := range values {
 		w.Header().Set("X-Seed-Count-"+name, strconv.Itoa(value))
 	}
@@ -383,7 +384,7 @@ func validateSeed(s *seed) error {
 	if !contains([]string{"idea", "feature", "todo", "bug"}, s.Type) {
 		return errors.New("无效的种子类型")
 	}
-	if !contains([]string{"inbox", "doing", "done"}, s.Status) {
+	if !contains([]string{"inbox", "doing", "paused", "skipped", "done"}, s.Status) {
 		return errors.New("无效的状态")
 	}
 	if !contains([]string{"high", "middle", "low"}, s.Priority) {

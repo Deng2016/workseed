@@ -39,7 +39,8 @@ export const api = {
     const readCount = (name: string) => Number(response.headers.get("X-Seed-Count-" + name) || 0)
     return { items, counts: {
       total: readCount("Total"), idea: readCount("Idea"), feature: readCount("Feature"),
-      todo: readCount("Todo"), bug: readCount("Bug"), inbox: readCount("Inbox"), doing: readCount("Doing"), done: readCount("Done"),
+      todo: readCount("Todo"), bug: readCount("Bug"), inbox: readCount("Inbox"), doing: readCount("Doing"),
+      paused: readCount("Paused"), skipped: readCount("Skipped"), done: readCount("Done"),
       high: readCount("High"), middle: readCount("Middle"), low: readCount("Low"),
     }, page: Number(response.headers.get('X-Seed-Page') || page),
       pageSize: Number(response.headers.get('X-Seed-Page-Size') || pageSize),

@@ -66,6 +66,12 @@ func TestOpenMigratesExistingSeedSchema(t *testing.T) {
 	if _, err := db.Exec(`UPDATE seeds SET status='doing' WHERE id=1`); err != nil {
 		t.Fatalf("doing status is rejected after migration: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE seeds SET status='paused' WHERE id=1`); err != nil {
+		t.Fatalf("paused status is rejected after migration: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE seeds SET status='skipped' WHERE id=1`); err != nil {
+		t.Fatalf("skipped status is rejected after migration: %v", err)
+	}
 	var foreignKeys int
 	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
 		t.Fatal(err)

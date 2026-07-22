@@ -30,7 +30,8 @@ const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'bug', label: 'Bug', icon: '⌁' },
 ]
 const statuses: { value: SeedStatus; label: string }[] = [
-  { value: 'inbox', label: '待实现' }, { value: 'doing', label: '进行中' }, { value: 'done', label: '已完成' },
+  { value: 'inbox', label: '待实现' }, { value: 'doing', label: '进行中' }, { value: 'paused', label: '已暂停' },
+  { value: 'skipped', label: '已跳过' }, { value: 'done', label: '已完成' },
 ]
 const priorities: { value: SeedPriority; label: string }[] = [
   { value: 'high', label: '高' }, { value: 'middle', label: '中' }, { value: 'low', label: '低' },
@@ -46,7 +47,7 @@ const collapsedNodes = ref(new Set<string>())
 const initialWorklogRange = quickRangeDates('month')
 const worklogRange = reactive({ start: initialWorklogRange.start, end: initialWorklogRange.end })
 const activeQuickRange = ref<QuickRange | null>('month')
-const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, done: 0, high: 0, middle: 0, low: 0 })
+const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, paused: 0, skipped: 0, done: 0, high: 0, middle: 0, low: 0 })
 const counts = ref<SeedCounts>(emptyCounts())
 const projectId = ref<number>(readStoredProjectId())
 const filter = ref<SeedType[]>(['idea', 'feature', 'todo', 'bug'])

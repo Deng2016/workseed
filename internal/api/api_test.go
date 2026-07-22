@@ -122,6 +122,69 @@ func TestDoingStatusCanBeCreatedAndFiltered(t *testing.T) {
 	}
 }
 
+func TestPausedAndSkippedStatusesCanBeCreatedUpdatedAndFiltered(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('暂停跳过项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	mux := http.NewServeMux()
+	Register(mux, db)
+
+	paused := seedRequest(t, mux, http.MethodPost, "/api/seeds", seed{
+		ProjectID: projectID,
+		Type:      "feature",
+		Status:    "paused",
+		Title:     "暂停处理",
+		Priority:  "middle",
+	}, http.StatusCreated)
+	if paused.Status != "paused" || paused.StartedAt != nil || paused.CompletedAt != nil {
+		t.Fatalf("paused seed = %#v", paused)
+	}
+
+	skipped := seedRequest(t, mux, http.MethodPost, "/api/seeds", seed{
+		ProjectID: projectID,
+		Type:      "todo",
+		Status:    "done",
+		Title:     "稍后跳过",
+		Priority:  "low",
+	}, http.StatusCreated)
+	if skipped.CompletedAt == nil {
+		t.Fatal("done seed did not record completion time")
+	}
+	skipped.Status = "skipped"
+	skipped = seedRequest(t, mux, http.MethodPatch, "/api/seeds/"+itoa(skipped.ID), skipped, http.StatusOK)
+	if skipped.Status != "skipped" || skipped.CompletedAt != nil || skipped.DurationSec != nil {
+		t.Fatalf("skipped seed = %#v", skipped)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/seeds?projectId="+itoa(projectID)+"&status=paused,skipped", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var items []seed
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("filtered items = %#v", items)
+	}
+	if got := recorder.Header().Get("X-Seed-Count-Paused"); got != "1" {
+		t.Fatalf("X-Seed-Count-Paused = %q, want 1", got)
+	}
+	if got := recorder.Header().Get("X-Seed-Count-Skipped"); got != "1" {
+		t.Fatalf("X-Seed-Count-Skipped = %q, want 1", got)
+	}
+}
+
 func TestSeedsAreOrderedByCreationTimeDescending(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {

@@ -153,7 +153,7 @@ cp -a ./data ./data-backup
 
 种子字段的可选值参见 README 中的[字段约定](../README.md#字段约定)。列表接口的 `type`、`status`、`priority` 参数可重复传递以实现多选，也兼容逗号分隔值；参数值为空表示该组不选择任何值。`keyword` 会使用 `LIKE` 同时模糊匹配标题和详细内容，并与其他筛选条件组合。接口还会通过 `X-Seed-Count-*` 响应头返回各类型、状态和优先级的总数，供前端在单次请求中展示筛选统计。
 
-种子列表按 `createdAt` 倒序返回。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时计算耗时。状态可在 `inbox`、`doing`、`done` 之间自由切换。
+种子列表按 `createdAt` 倒序返回。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时计算耗时。状态可在 `inbox`、`doing`、`paused`、`skipped`、`done` 之间自由切换。
 
 工作日志接口按 `completedAt` 倒序返回所有项目中已记录完成时间的种子。`startTime` 和 `endTime` 使用 RFC 3339 格式；开始时间包含在结果中，结束时间作为不包含的上界。两个参数均可省略。
 
@@ -183,15 +183,16 @@ MCP 服务提供以下工具：
 
 | 工具 | 作用 |
 | --- | --- |
-| `list_seeds` | 按高、中、低优先级列出事种；默认只返回 `inbox`，可传 `projectId`、`status` 和 `limit` |
+| `list_seeds` | 按高、中、低优先级列出事种；默认只返回 `inbox`，可传 `projectId`、`status` 和 `limit`，状态支持 `inbox`、`doing`、`paused`、`skipped`、`done`、`all` |
 | `start_seed` | 原子领取 `inbox` 事种，将其改为 `doing` 并记录开始时间；重复领取会失败 |
 | `complete_seed` | 将 `doing` 事种改为 `done`，记录完成时间并计算耗时 |
+| `skip_seed` | 将 `inbox`、`doing` 或 `paused` 事种标记为 `skipped`；重复调用保持成功，已完成事种不能跳过 |
 
 推荐 Agent 工作流：
 
 1. 调用 `list_seeds` 获取事种，选择返回列表中的第一条开始处理。
-2. 调用 `start_seed`；只有调用成功后才实际执行工作，失败时重新获取列表。
-3. 完成工作后调用 `complete_seed`。
+2. 条件不完整时调用 `skip_seed` 并继续下一条；否则调用 `start_seed`，只有调用成功后才实际执行工作。
+3. 完成工作后调用 `complete_seed`；多次尝试仍失败时调用 `skip_seed`。
 4. 重复以上步骤，直到 `list_seeds` 返回空列表。
 
 版本号由 Go 构建时自动写入的最后一次 Git 提交 ID 和提交时间生成，格式为 `<7位提交ID>_yyyyMMddHHmm`，其中时间使用 UTC，例如 `07b9a39_202607210344`。无法获取 Git 构建信息时版本为 `dev`。
