@@ -66,6 +66,20 @@ func TestOpenMigratesExistingSeedSchema(t *testing.T) {
 	if claimToken != nil {
 		t.Fatalf("claim token should be empty after migration: %v", claimToken)
 	}
+	var archivedAt any
+	if err := db.QueryRow(`SELECT archived_at FROM projects WHERE id=1`).Scan(&archivedAt); err != nil {
+		t.Fatal(err)
+	}
+	if archivedAt != nil {
+		t.Fatalf("migrated project unexpectedly archived: %v", archivedAt)
+	}
+	var workdayStart, workdayEnd string
+	if err := db.QueryRow(`SELECT workday_start, workday_end FROM app_settings WHERE id=1`).Scan(&workdayStart, &workdayEnd); err != nil {
+		t.Fatal(err)
+	}
+	if workdayStart != "10:00" || workdayEnd != "19:00" {
+		t.Fatalf("default workday = %s-%s, want 10:00-19:00", workdayStart, workdayEnd)
+	}
 	if _, err := db.Exec(`UPDATE seeds SET status='doing' WHERE id=1`); err != nil {
 		t.Fatalf("doing status is rejected after migration: %v", err)
 	}

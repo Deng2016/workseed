@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,13 @@ type project struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	CreatedAt   string `json:"createdAt"`
+	Archived    bool   `json:"archived"`
+	SeedCount   int64  `json:"seedCount"`
+}
+
+type settings struct {
+	WorkdayStart string `json:"workdayStart"`
+	WorkdayEnd   string `json:"workdayEnd"`
 }
 
 type seed struct {
@@ -46,6 +54,8 @@ func Register(mux *http.ServeMux, db *sql.DB) {
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/mcp/", mcpHandler)
 	mux.HandleFunc("/api/projects", s.projects)
+	mux.HandleFunc("/api/projects/", s.projectByID)
+	mux.HandleFunc("/api/settings", s.settings)
 	mux.HandleFunc("/api/seeds", s.seeds)
 	mux.HandleFunc("/api/seeds/", s.seedByID)
 	mux.HandleFunc("/api/worklogs", s.worklogs)
@@ -63,7 +73,14 @@ func appVersion(w http.ResponseWriter, r *http.Request) {
 func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		rows, err := s.db.Query(`SELECT id, name, description, created_at FROM projects ORDER BY updated_at DESC, id DESC`)
+		query := `SELECT p.id, p.name, p.description, p.created_at, p.archived_at IS NOT NULL,
+			(SELECT COUNT(*) FROM seeds s WHERE s.project_id = p.id)
+			FROM projects p`
+		if r.URL.Query().Get("includeArchived") != "true" {
+			query += ` WHERE p.archived_at IS NULL`
+		}
+		query += ` ORDER BY p.archived_at IS NOT NULL, p.updated_at DESC, p.id DESC`
+		rows, err := s.db.Query(query)
 		if err != nil {
 			problem(w, 500, err.Error())
 			return
@@ -72,7 +89,7 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 		items := []project{}
 		for rows.Next() {
 			var p project
-			if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.CreatedAt); err != nil {
+			if err := scanProject(rows, &p); err != nil {
 				problem(w, 500, err.Error())
 				return
 			}
@@ -100,7 +117,116 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in.ID, _ = res.LastInsertId()
+		if err := s.readProject(in.ID, &in); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
 		writeJSON(w, 201, in)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) projectByID(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/projects/"), 10, 64)
+	if err != nil || id < 1 {
+		problem(w, http.StatusNotFound, "项目不存在")
+		return
+	}
+	switch r.Method {
+	case http.MethodPatch:
+		var in struct {
+			Archived bool `json:"archived"`
+		}
+		if err := decode(r, &in); err != nil {
+			problem(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := s.db.Exec(`UPDATE projects SET archived_at=CASE WHEN ? THEN COALESCE(archived_at, CURRENT_TIMESTAMP) ELSE NULL END,
+			updated_at=CURRENT_TIMESTAMP WHERE id=?`, in.Archived, id)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if affected != 1 {
+			problem(w, http.StatusNotFound, "项目不存在")
+			return
+		}
+		var output project
+		if err := s.readProject(id, &output); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, output)
+	case http.MethodDelete:
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback()
+		var seedCount int64
+		if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(s.id) FROM projects p LEFT JOIN seeds s ON s.project_id=p.id WHERE p.id=?`, id).Scan(&seedCount); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if seedCount > 0 {
+			problem(w, http.StatusConflict, "只能删除没有事种的空项目")
+			return
+		}
+		result, err := tx.ExecContext(r.Context(), `DELETE FROM projects WHERE id=?`, id)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if affected != 1 {
+			problem(w, http.StatusNotFound, "项目不存在")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) settings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		var output settings
+		if err := readSettings(r.Context(), s.db, &output); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, output)
+	case http.MethodPatch:
+		var in settings
+		if err := decode(r, &in); err != nil {
+			problem(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateSettings(in); err != nil {
+			problem(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, err := s.db.ExecContext(r.Context(), `UPDATE app_settings SET workday_start=?, workday_end=?, updated_at=CURRENT_TIMESTAMP WHERE id=1`, in.WorkdayStart, in.WorkdayEnd); err != nil {
+			problem(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, in)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -148,7 +274,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "无效的优先级")
 			return
 		}
-		where := ` WHERE 1=1`
+		where := ` WHERE EXISTS (SELECT 1 FROM projects p WHERE p.id=seeds.project_id AND p.archived_at IS NULL)`
 		args := []any{}
 		if projectID > 0 {
 			where += ` AND project_id = ?`
@@ -215,6 +341,14 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, err.Error())
 			return
 		}
+		if err := s.requireActiveProject(r.Context(), in.ProjectID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				problem(w, http.StatusBadRequest, "项目不存在或已归档")
+			} else {
+				problem(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
 		res, err := s.db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority, started_at, completed_at)
 			VALUES(?, ?, ?, ?, ?, ?, CASE WHEN ?='doing' THEN CURRENT_TIMESTAMP ELSE NULL END, CASE WHEN ?='done' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
 			in.ProjectID, in.Type, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, in.Status, in.Status)
@@ -258,7 +392,11 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 		}
 		defer tx.Rollback()
 		var previousStatus string
-		if err := tx.QueryRowContext(r.Context(), `SELECT status FROM seeds WHERE id=?`, id).Scan(&previousStatus); err != nil {
+		if err := tx.QueryRowContext(r.Context(), `SELECT s.status FROM seeds s JOIN projects p ON p.id=s.project_id WHERE s.id=? AND p.archived_at IS NULL`, id).Scan(&previousStatus); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				problem(w, http.StatusNotFound, "种子不存在或所属项目已归档")
+				return
+			}
 			problem(w, 500, err.Error())
 			return
 		}
@@ -295,7 +433,12 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if startedAt != nil && completedAt != nil {
-				duration, err := worktime.DurationSeconds(*startedAt, *completedAt)
+				var appSettings settings
+				if err := readSettings(r.Context(), tx, &appSettings); err != nil {
+					problem(w, 500, err.Error())
+					return
+				}
+				duration, err := worktime.DurationSecondsForSchedule(*startedAt, *completedAt, appSettings.WorkdayStart, appSettings.WorkdayEnd)
 				if err != nil {
 					problem(w, 500, err.Error())
 					return
@@ -316,7 +459,7 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, in)
 	case http.MethodDelete:
-		if _, err := s.db.Exec(`DELETE FROM seeds WHERE id=?`, id); err != nil {
+		if _, err := s.db.Exec(`DELETE FROM seeds WHERE id=? AND EXISTS (SELECT 1 FROM projects p WHERE p.id=seeds.project_id AND p.archived_at IS NULL)`, id); err != nil {
 			problem(w, 500, err.Error())
 			return
 		}
@@ -349,7 +492,8 @@ func (s *server) worklogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT ` + seedColumns + ` FROM seeds WHERE completed_at IS NOT NULL`
+	query := `SELECT ` + seedColumns + ` FROM seeds WHERE completed_at IS NOT NULL
+		AND EXISTS (SELECT 1 FROM projects p WHERE p.id=seeds.project_id AND p.archived_at IS NULL)`
 	args := []any{}
 	if startTime != nil {
 		query += ` AND unixepoch(completed_at) >= unixepoch(?)`
@@ -392,10 +536,11 @@ func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) e
 		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'doing'), 0),
 		COALESCE(SUM(status = 'paused'), 0), COALESCE(SUM(status = 'skipped'), 0), COALESCE(SUM(status = 'done'), 0),
 		COALESCE(SUM(priority = 'high'), 0), COALESCE(SUM(priority = 'middle'), 0),
-		COALESCE(SUM(priority = 'low'), 0) FROM seeds`
+		COALESCE(SUM(priority = 'low'), 0) FROM seeds
+		WHERE EXISTS (SELECT 1 FROM projects p WHERE p.id=seeds.project_id AND p.archived_at IS NULL)`
 	args := []any{}
 	if projectID > 0 {
-		query += ` WHERE project_id = ?`
+		query += ` AND project_id = ?`
 		args = append(args, projectID)
 	}
 	err := db.QueryRow(query, args...).
@@ -449,7 +594,45 @@ func scanSeed(row seedScanner, item *seed) error {
 }
 
 func (s *server) readSeed(id int64, item *seed) error {
-	return scanSeed(s.db.QueryRow(`SELECT `+seedColumns+` FROM seeds WHERE id=?`, id), item)
+	return scanSeed(s.db.QueryRow(`SELECT `+seedColumns+` FROM seeds WHERE id=?
+		AND EXISTS (SELECT 1 FROM projects p WHERE p.id=seeds.project_id AND p.archived_at IS NULL)`, id), item)
+}
+
+func scanProject(row seedScanner, item *project) error {
+	return row.Scan(&item.ID, &item.Name, &item.Description, &item.CreatedAt, &item.Archived, &item.SeedCount)
+}
+
+func (s *server) readProject(id int64, item *project) error {
+	return scanProject(s.db.QueryRow(`SELECT p.id, p.name, p.description, p.created_at, p.archived_at IS NOT NULL,
+		(SELECT COUNT(*) FROM seeds s WHERE s.project_id=p.id) FROM projects p WHERE p.id=?`, id), item)
+}
+
+type contextRowQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func readSettings(ctx context.Context, queryer contextRowQueryer, output *settings) error {
+	return queryer.QueryRowContext(ctx, `SELECT workday_start, workday_end FROM app_settings WHERE id=1`).Scan(&output.WorkdayStart, &output.WorkdayEnd)
+}
+
+func validateSettings(value settings) error {
+	start, err := time.Parse("15:04", value.WorkdayStart)
+	if err != nil || start.Format("15:04") != value.WorkdayStart {
+		return errors.New("上班时间必须使用 HH:MM 格式")
+	}
+	end, err := time.Parse("15:04", value.WorkdayEnd)
+	if err != nil || end.Format("15:04") != value.WorkdayEnd {
+		return errors.New("下班时间必须使用 HH:MM 格式")
+	}
+	if !start.Before(end) {
+		return errors.New("下班时间必须晚于上班时间")
+	}
+	return nil
+}
+
+func (s *server) requireActiveProject(ctx context.Context, projectID int64) error {
+	var exists int
+	return s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id=? AND archived_at IS NULL`, projectID).Scan(&exists)
 }
 
 func parseOptionalTime(value string) (*time.Time, error) {

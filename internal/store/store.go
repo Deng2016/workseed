@@ -30,11 +30,27 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("initialize schema: %w", err)
 	}
+	if err := migrateProjectSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate project schema: %w", err)
+	}
 	if err := migrateSeedSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate seed schema: %w", err)
 	}
 	return db, nil
+}
+
+func migrateProjectSchema(db *sql.DB) error {
+	var definition string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'`).Scan(&definition); err != nil {
+		return err
+	}
+	if strings.Contains(definition, "archived_at TEXT") {
+		return nil
+	}
+	_, err := db.Exec(`ALTER TABLE projects ADD COLUMN archived_at TEXT`)
+	return err
 }
 
 func migrateSeedSchema(db *sql.DB) error {
@@ -121,11 +137,21 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  archived_at TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_projects_name
 ON projects(name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  workday_start TEXT NOT NULL DEFAULT '10:00',
+  workday_end TEXT NOT NULL DEFAULT '19:00',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO app_settings(id) VALUES(1);
 
 CREATE TABLE IF NOT EXISTS seeds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

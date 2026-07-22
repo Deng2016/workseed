@@ -1,4 +1,4 @@
-import type { Project, Seed, SeedListResult, SeedPriority, SeedStatus, SeedType } from './types'
+import type { AppSettings, Project, Seed, SeedListResult, SeedPriority, SeedStatus, SeedType } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -16,8 +16,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   version: () => request<{ version: string }>('/api/version'),
   projects: () => request<Project[]>('/api/projects'),
+  managedProjects: () => request<Project[]>('/api/projects?includeArchived=true'),
   createProject: (input: Pick<Project, 'name' | 'description'>) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
+  setProjectArchived: (id: number, archived: boolean) =>
+    request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ archived }) }),
+  deleteProject: (id: number) => request<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+  settings: () => request<AppSettings>('/api/settings'),
+  updateSettings: (input: AppSettings) =>
+    request<AppSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify(input) }),
   seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[], keyword = '', page = 1, pageSize = 20): Promise<SeedListResult> => {
     const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
     if (projectId > 0) query.set('projectId', String(projectId))

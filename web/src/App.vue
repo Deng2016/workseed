@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from './api'
-import type { Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
+import type { AppSettings, Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
 
-type Page = 'seeds' | 'worklogs'
+type Page = 'seeds' | 'worklogs' | 'settings'
 type QuickRange = 'year' | 'month' | 'week' | 'today'
 interface WorklogDay { key: string; label: string; items: Seed[] }
 interface WorklogMonth { key: string; label: string; days: WorklogDay[]; count: number }
 interface WorklogYear { key: string; label: string; months: WorklogMonth[]; count: number }
 
 const projectStorageKey = 'workseed.seed-list.project-id'
+
+function pageFromHash(): Page {
+  if (window.location.hash === '#/worklogs') return 'worklogs'
+  if (window.location.hash === '#/settings') return 'settings'
+  return 'seeds'
+}
 
 function parseStoredProjectId(value: string | null) {
   if (value === null) return 0
@@ -40,7 +46,7 @@ const priorities: { value: SeedPriority; label: string }[] = [
 const projects = ref<Project[]>([])
 const seeds = ref<Seed[]>([])
 const appVersion = ref('')
-const currentPage = ref<Page>(window.location.hash === '#/worklogs' ? 'worklogs' : 'seeds')
+const currentPage = ref<Page>(pageFromHash())
 const worklogs = ref<Seed[]>([])
 const worklogBusy = ref(false)
 const collapsedNodes = ref(new Set<string>())
@@ -67,12 +73,16 @@ const filteredTotal = ref(0)
 const hasMoreSeeds = ref(false)
 const loadMoreTrigger = ref<HTMLElement | null>(null)
 const error = ref('')
+const managedProjects = ref<Project[]>([])
+const settingsBusy = ref(false)
+const settingsSaving = ref(false)
 let copyFeedbackTimer: number | undefined
 let seedLoadToken = 0
 let loadMoreObserver: IntersectionObserver | undefined
 const seedPageSize = 20
 const projectForm = reactive({ name: '', description: '' })
 const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 'middle' as SeedPriority })
+const settingsForm = reactive<AppSettings>({ workdayStart: '10:00', workdayEnd: '19:00' })
 
 const currentProject = computed(() => projects.value.find(p => p.id === projectId.value))
 const count = (type: SeedType | 'all') => type === 'all' ? counts.value.total : counts.value[type]
@@ -113,6 +123,15 @@ async function loadProjects() {
 }
 async function loadVersion() {
   try { appVersion.value = (await api.version()).version } catch { /* 版本信息不影响主功能 */ }
+}
+async function loadSettingsPage() {
+  settingsBusy.value = true
+  try {
+    const [items, currentSettings] = await Promise.all([api.managedProjects(), api.settings()])
+    managedProjects.value = items
+    Object.assign(settingsForm, currentSettings)
+  } catch (e) { showError(e) }
+  finally { settingsBusy.value = false }
 }
 async function loadSeeds(reset = true) {
   if (currentPage.value !== 'seeds') return
@@ -176,6 +195,28 @@ async function createProject() {
     const item = await api.createProject(projectForm)
     projects.value.unshift(item); projectId.value = item.id
     projectForm.name = ''; projectForm.description = ''; projectDialog.value = false
+  } catch (e) { showError(e) }
+}
+async function saveSettings() {
+  settingsSaving.value = true
+  try { Object.assign(settingsForm, await api.updateSettings({ ...settingsForm })) }
+  catch (e) { showError(e) }
+  finally { settingsSaving.value = false }
+}
+async function setProjectArchived(project: Project, archived: boolean) {
+  if (archived && !confirm(`确定归档项目“${project.name}”吗？归档后将无法查询其事种。`)) return
+  try {
+    await api.setProjectArchived(project.id, archived)
+    if (archived && projectId.value === project.id) projectId.value = 0
+    await Promise.all([loadProjects(), loadSettingsPage()])
+  } catch (e) { showError(e) }
+}
+async function removeProject(project: Project) {
+  if (project.seedCount > 0 || !confirm(`确定删除空项目“${project.name}”吗？`)) return
+  try {
+    await api.deleteProject(project.id)
+    if (projectId.value === project.id) projectId.value = 0
+    await Promise.all([loadProjects(), loadSettingsPage()])
   } catch (e) { showError(e) }
 }
 function openSeed(seed?: Seed) {
@@ -332,11 +373,12 @@ function toggleNode(key: string) {
 }
 function isCollapsed(key: string) { return collapsedNodes.value.has(key) }
 function syncPageFromHash() {
-  currentPage.value = window.location.hash === '#/worklogs' ? 'worklogs' : 'seeds'
+	currentPage.value = pageFromHash()
   projectDialog.value = false
   seedDialog.value = false
-  if (currentPage.value === 'worklogs') loadWorklogs()
-  else {
+	if (currentPage.value === 'worklogs') loadWorklogs()
+	else if (currentPage.value === 'settings') loadSettingsPage()
+	else {
     loadSeeds()
     if (!projects.value.length) projectDialog.value = true
   }
@@ -374,6 +416,7 @@ onMounted(() => {
   loadVersion()
   loadProjects()
   if (currentPage.value === 'worklogs') loadWorklogs()
+  if (currentPage.value === 'settings') loadSettingsPage()
 })
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
@@ -393,6 +436,7 @@ onBeforeUnmount(() => {
         <select v-model="projectId"><option :value="0">全部项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select>
         <button class="quiet" @click="projectDialog = true">＋ 新建项目</button>
       </div>
+      <a class="settings-link" href="#/settings" title="设置" aria-label="设置">⚙</a>
       <button class="primary" :disabled="!projectId" :title="projectId ? '' : '请先选择一个具体项目'" @click="openSeed()">＋ 播下一颗种子</button>
     </header>
 
@@ -455,9 +499,10 @@ onBeforeUnmount(() => {
     </section>
   </main>
 
-  <main v-else class="shell worklog-page">
+  <main v-else-if="currentPage === 'worklogs'" class="shell worklog-page">
     <header class="topbar">
       <div class="brand"><a class="brand-link" href="#/worklogs"><img class="brand-mark" src="/favicon.png" alt="" /><span><strong>拾种</strong><small>WORKSEED</small></span></a><span class="brand-tagline">工作日志</span></div>
+      <a class="settings-link" href="#/settings" title="设置" aria-label="设置">⚙</a>
       <a class="quiet nav-link" href="#/">返回种子列表</a>
     </header>
 
@@ -504,6 +549,39 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </section>
+    </section>
+  </main>
+
+  <main v-else class="shell settings-page">
+    <header class="topbar">
+      <div class="brand"><a class="brand-link" href="#/"><img class="brand-mark" src="/favicon.png" alt="" /><span><strong>拾种</strong><small>WORKSEED</small></span></a><span class="brand-tagline">设置</span></div>
+      <a class="quiet nav-link" href="#/">返回种子列表</a>
+    </header>
+    <section class="settings-shell">
+      <div class="settings-heading"><div><p class="eyebrow">PREFERENCES</p><h1>设置</h1></div><p>管理项目与工作时间。</p></div>
+      <p v-if="settingsBusy" class="empty">正在读取设置……</p>
+      <div v-else class="settings-grid">
+        <form class="settings-card" @submit.prevent="saveSettings">
+          <div><p class="eyebrow">WORKDAY</p><h2>工作时间</h2><p>事种完成时只累计这个时间段内的耗时。</p></div>
+          <div class="worktime-fields">
+            <label>上班时间<input v-model="settingsForm.workdayStart" type="time" required /></label>
+            <span>—</span>
+            <label>下班时间<input v-model="settingsForm.workdayEnd" type="time" required /></label>
+          </div>
+          <div class="actions"><button class="primary" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存工作时间' }}</button></div>
+        </form>
+        <section class="settings-card project-management">
+          <div><p class="eyebrow">PROJECTS</p><h2>项目管理</h2><p>归档项目会从事种查询与项目选择中隐藏。</p></div>
+          <div v-if="!managedProjects.length" class="settings-empty">还没有项目</div>
+          <article v-for="project in managedProjects" :key="project.id" class="managed-project" :class="{ archived: project.archived }">
+            <div><h3>{{ project.name }} <span v-if="project.archived">已归档</span></h3><p>{{ project.description || '暂无描述' }} · {{ project.seedCount }} 颗事种</p></div>
+            <div class="managed-project-actions">
+              <button class="quiet" @click="setProjectArchived(project, !project.archived)">{{ project.archived ? '取消归档' : '归档' }}</button>
+              <button class="danger-button" :disabled="project.seedCount > 0" :title="project.seedCount > 0 ? '只能删除没有事种的空项目' : '删除空项目'" @click="removeProject(project)">删除</button>
+            </div>
+          </article>
+        </section>
+      </div>
     </section>
   </main>
 

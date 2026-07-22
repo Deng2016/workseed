@@ -528,6 +528,133 @@ func TestWorklogsFilterByCompletionTime(t *testing.T) {
 	}
 }
 
+func TestSettingsAndProjectManagement(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	activeResult, err := db.Exec(`INSERT INTO projects(name) VALUES('活跃项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeID, _ := activeResult.LastInsertId()
+	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', CURRENT_TIMESTAMP)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivedID, _ := archivedResult.LastInsertId()
+	emptyResult, err := db.Exec(`INSERT INTO projects(name) VALUES('空项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyID, _ := emptyResult.LastInsertId()
+	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, completed_at) VALUES
+		(?, 'todo', 'done', '活跃事种', 'middle', '2026-07-22 08:00:00'),
+		(?, 'todo', 'done', '归档事种', 'middle', '2026-07-22 08:00:00')`, activeID, archivedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	request := func(method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var reader *bytes.Reader
+		if body == nil {
+			reader = bytes.NewReader(nil)
+		} else {
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader = bytes.NewReader(encoded)
+		}
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, reader)
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	response := request(http.MethodGet, "/api/projects", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("active projects status = %d: %s", response.Code, response.Body.String())
+	}
+	var activeProjects []project
+	if err := json.NewDecoder(response.Body).Decode(&activeProjects); err != nil {
+		t.Fatal(err)
+	}
+	if len(activeProjects) != 2 {
+		t.Fatalf("active projects = %#v", activeProjects)
+	}
+
+	response = request(http.MethodGet, "/api/projects?includeArchived=true", nil)
+	var allProjects []project
+	if err := json.NewDecoder(response.Body).Decode(&allProjects); err != nil {
+		t.Fatal(err)
+	}
+	if len(allProjects) != 3 || !allProjects[2].Archived || allProjects[2].SeedCount != 1 {
+		t.Fatalf("all projects = %#v", allProjects)
+	}
+
+	response = request(http.MethodGet, "/api/seeds?status=done", nil)
+	var visibleSeeds []seed
+	if err := json.NewDecoder(response.Body).Decode(&visibleSeeds); err != nil {
+		t.Fatal(err)
+	}
+	if len(visibleSeeds) != 1 || visibleSeeds[0].Title != "活跃事种" {
+		t.Fatalf("visible seeds = %#v", visibleSeeds)
+	}
+	response = request(http.MethodGet, "/api/worklogs", nil)
+	var visibleWorklogs []seed
+	if err := json.NewDecoder(response.Body).Decode(&visibleWorklogs); err != nil {
+		t.Fatal(err)
+	}
+	if len(visibleWorklogs) != 1 || visibleWorklogs[0].Title != "活跃事种" {
+		t.Fatalf("visible worklogs = %#v", visibleWorklogs)
+	}
+
+	response = request(http.MethodDelete, "/api/projects/"+itoa(activeID), nil)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("non-empty delete status = %d, want 409", response.Code)
+	}
+	response = request(http.MethodDelete, "/api/projects/"+itoa(emptyID), nil)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("empty delete status = %d, want 204: %s", response.Code, response.Body.String())
+	}
+
+	response = request(http.MethodPatch, "/api/projects/"+itoa(archivedID), map[string]bool{"archived": false})
+	if response.Code != http.StatusOK {
+		t.Fatalf("restore status = %d: %s", response.Code, response.Body.String())
+	}
+	var restored project
+	if err := json.NewDecoder(response.Body).Decode(&restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Archived {
+		t.Fatalf("restored project remains archived: %#v", restored)
+	}
+
+	response = request(http.MethodGet, "/api/settings", nil)
+	var currentSettings settings
+	if err := json.NewDecoder(response.Body).Decode(&currentSettings); err != nil {
+		t.Fatal(err)
+	}
+	if currentSettings.WorkdayStart != "10:00" || currentSettings.WorkdayEnd != "19:00" {
+		t.Fatalf("default settings = %#v", currentSettings)
+	}
+	response = request(http.MethodPatch, "/api/settings", settings{WorkdayStart: "18:00", WorkdayEnd: "09:00"})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid settings status = %d, want 400", response.Code)
+	}
+	response = request(http.MethodPatch, "/api/settings", settings{WorkdayStart: "09:30", WorkdayEnd: "18:30"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("update settings status = %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAppVersion(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/version", nil)

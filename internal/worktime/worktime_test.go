@@ -52,3 +52,20 @@ func TestDurationSecondsUsesLocalWorkingHours(t *testing.T) {
 		t.Fatalf("DurationSeconds() = %d, want %d", got, 2*60*60)
 	}
 }
+
+func TestDurationSecondsForSchedule(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previousLocal })
+
+	got, err := DurationSecondsForSchedule("2026-07-22 08:00:00", "2026-07-23 18:00:00", "09:30", "17:30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 16*60*60 {
+		t.Fatalf("DurationSecondsForSchedule() = %d, want %d", got, 16*60*60)
+	}
+	if _, err := DurationSecondsForSchedule("2026-07-22 08:00:00", "2026-07-22 18:00:00", "19:00", "10:00"); err == nil {
+		t.Fatal("invalid schedule was accepted")
+	}
+}

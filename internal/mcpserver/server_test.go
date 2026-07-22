@@ -199,6 +199,49 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 }
 
+func TestArchivedProjectsAreExcludedFromMCP(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	activeResult, err := db.Exec(`INSERT INTO projects(name) VALUES('活跃项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeID, _ := activeResult.LastInsertId()
+	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', CURRENT_TIMESTAMP)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivedID, _ := archivedResult.LastInsertId()
+	activeSeed, err := db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority) VALUES(?, 'todo', 'inbox', '活跃事种', 'middle')`, activeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeSeedID, _ := activeSeed.LastInsertId()
+	archivedSeed, err := db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority) VALUES(?, 'todo', 'inbox', '归档事种', 'high')`, archivedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archivedSeedID, _ := archivedSeed.LastInsertId()
+
+	items, err := listSeeds(context.Background(), db, listSeedsInput{Status: "inbox", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != activeSeedID {
+		t.Fatalf("listed seeds = %#v", items)
+	}
+	if _, err := getSeed(context.Background(), db, getSeedInput{SeedID: archivedSeedID}); err == nil {
+		t.Fatal("archived seed remained queryable")
+	}
+	if _, err := startSeed(context.Background(), db, claimSeedInput{SeedID: archivedSeedID, ClaimToken: "archived-project-test"}); err == nil {
+		t.Fatal("archived seed remained claimable")
+	}
+}
+
 func callTool(t *testing.T, session *mcp.ClientSession, name string, arguments map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: arguments})

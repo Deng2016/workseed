@@ -191,7 +191,7 @@ func listSeeds(ctx context.Context, db *sql.DB, input listSeedsInput) ([]seedOut
 	}
 
 	query := `SELECT ` + seedColumns + `
-		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE 1=1`
+		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE p.archived_at IS NULL`
 	args := []any{}
 	if input.ProjectID > 0 {
 		query += ` AND s.project_id = ?`
@@ -236,7 +236,7 @@ func getSeed(ctx context.Context, db *sql.DB, input getSeedInput) (getSeedOutput
 	var item seedOutput
 	var storedClaimToken sql.NullString
 	err = scanSeedWithClaim(db.QueryRowContext(ctx, `SELECT `+seedColumns+`, s.claim_token
-		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, input.SeedID), &item, &storedClaimToken)
+		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ? AND p.archived_at IS NULL`, input.SeedID), &item, &storedClaimToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return getSeedOutput{}, fmt.Errorf("事种 %d 不存在", input.SeedID)
 	}
@@ -320,7 +320,11 @@ func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOu
 		return seedOutput{}, err
 	}
 	if startedAt != nil && completedAt != nil {
-		duration, err := worktime.DurationSeconds(*startedAt, *completedAt)
+		var workdayStart, workdayEnd string
+		if err := tx.QueryRowContext(ctx, `SELECT workday_start, workday_end FROM app_settings WHERE id=1`).Scan(&workdayStart, &workdayEnd); err != nil {
+			return seedOutput{}, err
+		}
+		duration, err := worktime.DurationSecondsForSchedule(*startedAt, *completedAt, workdayStart, workdayEnd)
 		if err != nil {
 			return seedOutput{}, err
 		}
@@ -423,7 +427,8 @@ func claimTokenMatches(stored sql.NullString, claimToken string) bool {
 func readSeedClaim(ctx context.Context, tx *sql.Tx, seedID int64) (string, sql.NullString, error) {
 	var status string
 	var claimToken sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT status, claim_token FROM seeds WHERE id = ?`, seedID).Scan(&status, &claimToken); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT s.status, s.claim_token FROM seeds s JOIN projects p ON p.id=s.project_id
+		WHERE s.id = ? AND p.archived_at IS NULL`, seedID).Scan(&status, &claimToken); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", sql.NullString{}, fmt.Errorf("事种 %d 不存在", seedID)
 		}
@@ -476,6 +481,6 @@ func scanSeedWithClaim(row seedScanner, item *seedOutput, claimToken *sql.NullSt
 func readSeed(ctx context.Context, tx *sql.Tx, seedID int64) (seedOutput, error) {
 	var item seedOutput
 	err := scanSeed(tx.QueryRowContext(ctx, `SELECT `+seedColumns+`
-		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, seedID), &item)
+		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ? AND p.archived_at IS NULL`, seedID), &item)
 	return item, err
 }

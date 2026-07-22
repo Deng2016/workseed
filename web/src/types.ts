@@ -7,6 +7,13 @@ export interface Project {
   name: string
   description: string
   createdAt?: string
+  archived: boolean
+  seedCount: number
+}
+
+export interface AppSettings {
+  workdayStart: string
+  workdayEnd: string
 }
 
 export interface SeedCounts {
