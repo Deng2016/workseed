@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultHost = "127.0.0.1"
-	firstPort   = 8080
+	firstPort   = 8866
 	dataDir     = "./data"
 )
 
