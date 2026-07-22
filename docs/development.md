@@ -95,6 +95,12 @@ SHA256SUMS
 
 Windows ZIP 压缩优先使用 `zip`；没有安装 `zip` 时，脚本会自动使用 Python 3 标准库。
 
+Windows amd64 可执行文件的图标来自 `web/public/favicon.ico`，预生成资源保存在 `cmd/workseed/rsrc_windows_amd64.syso`，会由 Go 链接器自动加入 Windows 构建。更换 favicon 后执行以下命令重新生成资源：
+
+```bash
+go generate ./cmd/workseed
+```
+
 ## 数据存储与备份
 
 数据库位于当前工作目录的 `./data/workseed.db`。SQLite 使用 WAL 模式，运行时还可能出现 `workseed.db-wal` 和 `workseed.db-shm`。

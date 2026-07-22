@@ -1,5 +1,7 @@
 package main
 
+//go:generate go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico ../../web/public/favicon.ico -o rsrc_windows_amd64.syso
+
 import (
 	"fmt"
 	"log"
