@@ -125,6 +125,7 @@ cp -a ./data ./data-backup
 | `DELETE` | `/api/seeds/{id}` | 删除种子 |
 | `GET` | `/api/worklogs?startTime=...&endTime=...` | 按完成时间获取工作日志 |
 | `GET` | `/api/version` | 获取当前程序版本 |
+| MCP | `/mcp` | Agent 使用的 Streamable HTTP MCP 端点 |
 
 种子列表接口的 `projectId` 可省略；省略时返回所有项目中的种子。`page` 默认为 `1`，`pageSize` 默认为 `20`、最大为 `100`。响应体仍为种子数组，分页信息通过 `X-Seed-Page`、`X-Seed-Page-Size`、`X-Seed-Filtered-Total` 和 `X-Seed-Has-More` 响应头返回。
 
@@ -156,6 +157,43 @@ cp -a ./data ./data-backup
 
 工作日志接口按 `completedAt` 倒序返回所有项目中已记录完成时间的种子。`startTime` 和 `endTime` 使用 RFC 3339 格式；开始时间包含在结果中，结束时间作为不包含的上界。两个参数均可省略。
 
+## Agent MCP 接入
+
+Workseed 启动后会在同一个本地 HTTP 服务上提供 Streamable HTTP MCP 端点：
+
+```text
+http://127.0.0.1:8866/mcp
+```
+
+如果 `8866` 已被占用，请使用启动日志中显示的实际端口。服务只监听 `127.0.0.1`，默认没有额外身份验证，适合本机 Agent 使用，不应通过反向代理直接暴露到公网。
+
+在支持远程 MCP 的 Agent 中添加名为 `workseed` 的服务，并将 URL 指向上述端点。常见配置形态如下；具体字段以所用 Agent 的配置格式为准：
+
+```json
+{
+  "mcpServers": {
+    "workseed": {
+      "url": "http://127.0.0.1:8866/mcp"
+    }
+  }
+}
+```
+
+MCP 服务提供以下工具：
+
+| 工具 | 作用 |
+| --- | --- |
+| `list_seeds` | 按高、中、低优先级列出事种；默认只返回 `inbox`，可传 `projectId`、`status` 和 `limit` |
+| `start_seed` | 原子领取 `inbox` 事种，将其改为 `doing` 并记录开始时间；重复领取会失败 |
+| `complete_seed` | 将 `doing` 事种改为 `done`，记录完成时间并计算耗时 |
+
+推荐 Agent 工作流：
+
+1. 调用 `list_seeds` 获取事种，选择返回列表中的第一条开始处理。
+2. 调用 `start_seed`；只有调用成功后才实际执行工作，失败时重新获取列表。
+3. 完成工作后调用 `complete_seed`。
+4. 重复以上步骤，直到 `list_seeds` 返回空列表。
+
 版本号由 Go 构建时自动写入的最后一次 Git 提交 ID 和提交时间生成，格式为 `<7位提交ID>_yyyyMMddHHmm`，其中时间使用 UTC，例如 `07b9a39_202607210344`。无法获取 Git 构建信息时版本为 `dev`。
 
 ## 项目结构
@@ -166,6 +204,7 @@ cp -a ./data ./data-backup
 ├── docs/                  # 项目文档
 ├── images/                # README 截图
 ├── internal/api/          # HTTP JSON API
+├── internal/mcpserver/    # Agent MCP 服务与工具
 ├── internal/store/        # SQLite 初始化与迁移
 ├── internal/webui/        # 嵌入式前端及构建产物
 ├── web/                   # Vue 3 + TypeScript 前端源码

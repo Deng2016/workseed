@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"workseed/internal/mcpserver"
 	buildversion "workseed/internal/version"
 )
 
@@ -40,6 +41,9 @@ type seed struct {
 
 func Register(mux *http.ServeMux, db *sql.DB) {
 	s := &server{db: db}
+	mcpHandler := mcpserver.Handler(db)
+	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp/", mcpHandler)
 	mux.HandleFunc("/api/projects", s.projects)
 	mux.HandleFunc("/api/seeds", s.seeds)
 	mux.HandleFunc("/api/seeds/", s.seedByID)
