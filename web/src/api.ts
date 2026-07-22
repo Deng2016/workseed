@@ -18,7 +18,7 @@ export const api = {
   projects: () => request<Project[]>('/api/projects'),
   createProject: (input: Pick<Project, 'name' | 'description'>) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
-  seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[], page = 1, pageSize = 20): Promise<SeedListResult> => {
+  seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[], keyword = '', page = 1, pageSize = 20): Promise<SeedListResult> => {
     const query = new URLSearchParams({ projectId: String(projectId), page: String(page), pageSize: String(pageSize) })
     const addFilter = (name: string, values: string[]) => {
       if (!values.length) query.set(name, '')
@@ -27,6 +27,7 @@ export const api = {
     addFilter('type', types)
     addFilter('status', statuses)
     addFilter('priority', priorities)
+    if (keyword.trim()) query.set('keyword', keyword.trim())
     const url = `/api/seeds?${query}`
     const response = await fetch(url)
     if (!response.ok) {

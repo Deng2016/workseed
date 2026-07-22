@@ -229,15 +229,20 @@ textarea:focus {
 }
 
 .topbar+.filter-row {
-    margin-top: 8px;
+    margin-top: 0;
 }
 
 .filter-row {
     max-width: 1480px;
-    margin: 0 auto 7px;
+    margin: 0 auto 2px;
+    padding: 3px 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 7px;
+    position: sticky;
+    top: 64px;
+    z-index: 4;
+    background: #f4f2ea;
 }
 
 .filter-row .filters {
@@ -268,6 +273,32 @@ textarea:focus {
     background-color: transparent;
     box-shadow: none;
     cursor: pointer;
+}
+
+.keyword-search {
+    min-width: 0;
+}
+
+.keyword-search span {
+    flex: 0 0 auto;
+    color: #6d776e;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.keyword-search input {
+    min-width: 0;
+    width: 100%;
+    padding: 5px 8px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    font-size: 12px;
+}
+
+.keyword-search:focus-within {
+    border-color: #bfc9bd;
+    box-shadow: 0 0 0 3px #537e6212;
 }
 
 .filter-result {
@@ -640,10 +671,19 @@ textarea:focus {
 
 .load-more-status {
     min-height: 72px;
-    display: grid;
-    place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
     color: #8a938b;
     font-size: 12px;
+}
+
+.list-version {
+    color: #b0b5af;
+    font-size: 10px;
+    letter-spacing: .03em;
+    user-select: all;
 }
 
 .seed-list {
@@ -679,17 +719,6 @@ textarea:focus {
 
 .seed-card h2 {
     font-size: 13px;
-}
-
-.app-version {
-    max-width: 1480px;
-    margin: 18px auto 0;
-    padding: 0 5px;
-    color: #b0b5af;
-    font-size: 10px;
-    letter-spacing: .03em;
-    text-align: right;
-    user-select: all;
 }
 
 .overlay {
@@ -1051,7 +1080,8 @@ textarea:focus {
     .filter-row {
         grid-template-columns: 1fr;
         overflow-x: visible;
-        padding-bottom: 0;
+        padding: 0;
+        position: static;
     }
 
     .filters button {

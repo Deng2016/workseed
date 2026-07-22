@@ -144,6 +144,12 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 		where, args = appendMultiFilter(where, args, "type", kinds, kindsSupplied)
 		where, args = appendMultiFilter(where, args, "status", statuses, statusesSupplied)
 		where, args = appendMultiFilter(where, args, "priority", priorities, prioritiesSupplied)
+		keyword := strings.TrimSpace(queryValues.Get("keyword"))
+		if keyword != "" {
+			where += ` AND (title LIKE ? OR content LIKE ?)`
+			pattern := "%" + keyword + "%"
+			args = append(args, pattern, pattern)
+		}
 		var filteredTotal int64
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM seeds`+where, args...).Scan(&filteredTotal); err != nil {
 			problem(w, 500, err.Error())

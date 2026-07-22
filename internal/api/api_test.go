@@ -295,6 +295,58 @@ func TestSeedsSupportMultipleAndEmptyFilters(t *testing.T) {
 	}
 }
 
+func TestSeedsSearchKeywordInTitleAndContent(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('关键字搜索项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority) VALUES
+		(?, 'todo', 'inbox', '实现搜索功能', '仅标题包含关键字', 'middle'),
+		(?, 'bug', 'doing', '修复列表问题', '让详细内容支持搜索', 'high'),
+		(?, 'feature', 'inbox', '无关种子', '这里没有匹配内容', 'high')`, projectID, projectID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	requestSeeds := func(path string) (*httptest.ResponseRecorder, []seed) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+		var items []seed
+		if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+			t.Fatal(err)
+		}
+		return recorder, items
+	}
+
+	basePath := "/api/seeds?projectId=" + itoa(projectID) + "&keyword=%E6%90%9C%E7%B4%A2"
+	response, items := requestSeeds(basePath)
+	if len(items) != 2 || items[0].Title != "修复列表问题" || items[1].Title != "实现搜索功能" {
+		t.Fatalf("keyword items = %#v", items)
+	}
+	if got := response.Header().Get("X-Seed-Filtered-Total"); got != "2" {
+		t.Fatalf("X-Seed-Filtered-Total = %q, want 2", got)
+	}
+
+	_, items = requestSeeds(basePath + "&priority=high")
+	if len(items) != 1 || items[0].Title != "修复列表问题" {
+		t.Fatalf("keyword and priority items = %#v", items)
+	}
+}
+
 func TestWorklogsFilterByCompletionTime(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {

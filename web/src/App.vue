@@ -39,6 +39,7 @@ const projectId = ref<number>(0)
 const filter = ref<SeedType[]>(['idea', 'feature', 'todo', 'bug'])
 const statusFilter = ref<SeedStatus[]>(['inbox', 'doing'])
 const priorityFilter = ref<SeedPriority[]>(['high', 'middle', 'low'])
+const keyword = ref('')
 const projectDialog = ref(false)
 const seedDialog = ref(false)
 const contentInput = ref<HTMLTextAreaElement | null>(null)
@@ -120,7 +121,7 @@ async function loadSeeds(reset = true) {
   } else loadingMore.value = true
   let loadedSuccessfully = false
   try {
-    const result = await api.seeds(projectId.value, [...filter.value], [...statusFilter.value], [...priorityFilter.value], nextPage, seedPageSize)
+    const result = await api.seeds(projectId.value, [...filter.value], [...statusFilter.value], [...priorityFilter.value], keyword.value, nextPage, seedPageSize)
     if (token !== seedLoadToken) return
     if (reset) seeds.value = result.items
     else {
@@ -296,6 +297,7 @@ function resetFilters() {
   filter.value = ['idea', 'feature', 'todo', 'bug']
   statusFilter.value = ['inbox', 'doing']
   priorityFilter.value = ['high', 'middle', 'low']
+  keyword.value = ''
 }
 function toggleSelection<T>(values: T[], value: T) {
   const index = values.indexOf(value)
@@ -334,7 +336,7 @@ function handleKeydown(event: KeyboardEvent) {
   else if (projectDialog.value) projectDialog.value = false
 }
 
-watch([projectId, filter, statusFilter, priorityFilter], () => loadSeeds(), { deep: true })
+watch([projectId, filter, statusFilter, priorityFilter, keyword], () => loadSeeds(), { deep: true })
 watch(loadMoreTrigger, (current, previous) => {
   if (previous) loadMoreObserver?.unobserve(previous)
   if (current) loadMoreObserver?.observe(current)
@@ -375,6 +377,9 @@ onBeforeUnmount(() => {
     </section>
 
     <div class="filter-row">
+      <label class="filter-control keyword-search">
+        <input v-model="keyword" type="search" placeholder="搜索标题或内容" aria-label="按标题或内容搜索" />
+      </label>
       <details class="filter-control filter-dropdown" @mouseleave="closeFilterDropdown">
         <summary><span>类型</span><strong>已选 {{ filter.length }}/{{ types.length - 1 }}</strong></summary>
         <div class="filter-menu" role="group" aria-label="按种子类型筛选"><label v-for="item in types.slice(1)" :key="item.value" class="check-option" @click.prevent="toggleTypeFilter(item.value)"><input type="checkbox" :checked="isTypeSelected(item.value)" /><span>{{ item.label }}</span><em>{{ count(item.value) }}</em></label></div>
@@ -393,7 +398,7 @@ onBeforeUnmount(() => {
     <section class="seed-list">
       <p v-if="busy" class="empty">正在翻土……</p>
       <div v-else-if="!projectId" class="empty"><b>先创建一个项目</b><span>项目是一片苗圃，用来收纳相关的工作种子。</span></div>
-      <div v-else-if="!seeds.length && counts.total > 0" class="empty"><b>没有符合条件的种子</b><span>尝试切换类型、状态或优先级筛选。</span><button class="quiet" @click="resetFilters">恢复默认筛选</button></div>
+      <div v-else-if="!seeds.length && counts.total > 0" class="empty"><b>没有符合条件的种子</b><span>尝试修改关键字，或切换类型、状态、优先级筛选。</span><button class="quiet" @click="resetFilters">恢复默认筛选</button></div>
       <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>
@@ -420,9 +425,9 @@ onBeforeUnmount(() => {
         <span v-if="loadingMore">正在加载更多种子……</span>
         <span v-else-if="hasMoreSeeds">继续向下滚动加载更多</span>
         <span v-else>已显示全部 {{ filteredTotal }} 颗种子</span>
+        <span v-if="appVersion" class="list-version">· 版本 {{ appVersion }}</span>
       </div>
     </section>
-    <footer v-if="appVersion" class="app-version" title="当前版本">版本 {{ appVersion }}</footer>
   </main>
 
   <main v-else class="shell worklog-page">
