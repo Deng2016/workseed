@@ -42,7 +42,7 @@ func migrateSeedSchema(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'seeds'`).Scan(&definition); err != nil {
 		return err
 	}
-	isFinalSchema := strings.Contains(definition, "priority TEXT") &&
+	isCurrentSchema := strings.Contains(definition, "priority TEXT") &&
 		strings.Contains(definition, "'doing'") &&
 		strings.Contains(definition, "'paused'") &&
 		strings.Contains(definition, "'skipped'") &&
@@ -51,8 +51,12 @@ func migrateSeedSchema(db *sql.DB) error {
 		!strings.Contains(definition, "'planned'") &&
 		!strings.Contains(definition, "'someday'") &&
 		!strings.Contains(definition, "'archived'")
-	if isFinalSchema {
+	if isCurrentSchema && strings.Contains(definition, "claim_token TEXT") {
 		return nil
+	}
+	if isCurrentSchema {
+		_, err := db.Exec(`ALTER TABLE seeds ADD COLUMN claim_token TEXT`)
+		return err
 	}
 	if _, err := db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
 		return err
@@ -87,10 +91,11 @@ CREATE TABLE seeds (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   started_at TEXT,
   completed_at TEXT,
-  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
+  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0),
+  claim_token TEXT
 );
 
-INSERT INTO seeds(id, project_id, parent_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds)
+INSERT INTO seeds(id, project_id, parent_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds, claim_token)
 SELECT
   id, project_id, parent_id, type,
   CASE WHEN status IN ('doing', 'paused', 'skipped', 'done') THEN status ELSE 'inbox' END,
@@ -102,7 +107,7 @@ SELECT
     WHEN CAST(priority AS INTEGER) = 1 THEN 'low'
     ELSE 'middle'
   END,
-  created_at, updated_at, NULL, completed_at, NULL
+  created_at, updated_at, NULL, completed_at, NULL, NULL
 FROM seeds_before_schema_migration;
 
 DROP TABLE seeds_before_schema_migration;
@@ -135,7 +140,8 @@ CREATE TABLE IF NOT EXISTS seeds (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   started_at TEXT,
   completed_at TEXT,
-  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
+  duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0),
+  claim_token TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_seeds_project_type_status

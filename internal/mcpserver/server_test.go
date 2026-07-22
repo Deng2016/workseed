@@ -80,10 +80,11 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 
 	highPriorityID := listed.Items[0].ID
-	getResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
-	var fetched seedOutput
+	highClaimToken := "agent-high-claim"
+	getResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	var fetched getSeedOutput
 	decodeStructured(t, getResult.StructuredContent, &fetched)
-	if fetched.ID != highPriorityID || fetched.ProjectID != secondProjectID || fetched.Status != "inbox" {
+	if fetched.Seed.ID != highPriorityID || fetched.Seed.ProjectID != secondProjectID || fetched.Seed.Status != "inbox" || fetched.ClaimedByCaller {
 		t.Fatalf("fetched seed = %#v", fetched)
 	}
 
@@ -97,33 +98,38 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 		t.Fatal("getting a missing seed unexpectedly succeeded")
 	}
 
-	startResult := callTool(t, session, "start_seed", map[string]any{"seedId": highPriorityID})
+	startResult := callTool(t, session, "start_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var started transitionOutput
 	decodeStructured(t, startResult.StructuredContent, &started)
 	if started.Seed.Status != "doing" || started.Seed.StartedAt == nil {
 		t.Fatalf("started seed = %#v", started.Seed)
 	}
-	doingResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
-	var fetchedDoing seedOutput
+	doingResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	var fetchedDoing getSeedOutput
 	decodeStructured(t, doingResult.StructuredContent, &fetchedDoing)
-	if fetchedDoing.Status != "doing" || fetchedDoing.StartedAt == nil {
+	if fetchedDoing.Seed.Status != "doing" || fetchedDoing.Seed.StartedAt == nil || !fetchedDoing.ClaimedByCaller {
 		t.Fatalf("fetched doing seed = %#v", fetchedDoing)
 	}
 
-	duplicateStart, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "start_seed", Arguments: map[string]any{"seedId": highPriorityID},
-	})
-	if err != nil {
-		t.Fatal(err)
+	duplicateStart := callTool(t, session, "start_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	var startedAgain transitionOutput
+	decodeStructured(t, duplicateStart.StructuredContent, &startedAgain)
+	if startedAgain.Seed.Status != "doing" {
+		t.Fatalf("idempotent start seed = %#v", startedAgain.Seed)
 	}
-	if !duplicateStart.IsError {
-		t.Fatal("starting an already doing seed unexpectedly succeeded")
+	assertToolError(t, session, "start_seed", map[string]any{"seedId": highPriorityID, "claimToken": "other-agent-claim"})
+	otherAgentView := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": "other-agent-claim"})
+	var fetchedByOther getSeedOutput
+	decodeStructured(t, otherAgentView.StructuredContent, &fetchedByOther)
+	if fetchedByOther.ClaimedByCaller {
+		t.Fatalf("another agent unexpectedly owns seed: %#v", fetchedByOther)
 	}
 
 	if _, err := db.Exec(`UPDATE seeds SET started_at = datetime(CURRENT_TIMESTAMP, '-120 seconds') WHERE id = ?`, highPriorityID); err != nil {
 		t.Fatal(err)
 	}
-	completeResult := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID})
+	assertToolError(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": "other-agent-claim"})
+	completeResult := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var completed transitionOutput
 	decodeStructured(t, completeResult.StructuredContent, &completed)
 	if completed.Seed.Status != "done" || completed.Seed.CompletedAt == nil {
@@ -132,44 +138,59 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != 120 {
 		t.Fatalf("duration = %v, want 120", completed.Seed.DurationSeconds)
 	}
-	doneResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID})
-	var fetchedDone seedOutput
+	duplicateComplete := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	var completedAgain transitionOutput
+	decodeStructured(t, duplicateComplete.StructuredContent, &completedAgain)
+	if completedAgain.Seed.Status != "done" {
+		t.Fatalf("idempotent complete seed = %#v", completedAgain.Seed)
+	}
+	doneResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	var fetchedDone getSeedOutput
 	decodeStructured(t, doneResult.StructuredContent, &fetchedDone)
-	if fetchedDone.Status != "done" || fetchedDone.CompletedAt == nil {
+	if fetchedDone.Seed.Status != "done" || fetchedDone.Seed.CompletedAt == nil || !fetchedDone.ClaimedByCaller {
 		t.Fatalf("fetched done seed = %#v", fetchedDone)
 	}
 
-	completeInbox, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "complete_seed", Arguments: map[string]any{"seedId": listed.Items[1].ID},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !completeInbox.IsError {
-		t.Fatal("completing an inbox seed unexpectedly succeeded")
-	}
+	assertToolError(t, session, "complete_seed", map[string]any{"seedId": listed.Items[1].ID, "claimToken": "unused-claim"})
 
-	skipInboxResult := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[1].ID})
+	skipInboxArgs := map[string]any{"seedId": listed.Items[1].ID, "expectedStatus": "inbox"}
+	skipInboxResult := callTool(t, session, "skip_seed", skipInboxArgs)
 	var skippedInbox transitionOutput
 	decodeStructured(t, skipInboxResult.StructuredContent, &skippedInbox)
 	if skippedInbox.Seed.Status != "skipped" || skippedInbox.Seed.CompletedAt != nil {
 		t.Fatalf("skipped inbox seed = %#v", skippedInbox.Seed)
 	}
-	duplicateSkip := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[1].ID})
+	duplicateSkip := callTool(t, session, "skip_seed", skipInboxArgs)
 	var skippedAgain transitionOutput
 	decodeStructured(t, duplicateSkip.StructuredContent, &skippedAgain)
 	if skippedAgain.Seed.Status != "skipped" {
 		t.Fatalf("idempotent skip seed = %#v", skippedAgain.Seed)
 	}
 
-	startLow := callTool(t, session, "start_seed", map[string]any{"seedId": listed.Items[2].ID})
+	lowClaimToken := "agent-low-claim"
+	startLow := callTool(t, session, "start_seed", map[string]any{"seedId": listed.Items[2].ID, "claimToken": lowClaimToken})
 	var doingLow transitionOutput
 	decodeStructured(t, startLow.StructuredContent, &doingLow)
-	skipDoingResult := callTool(t, session, "skip_seed", map[string]any{"seedId": listed.Items[2].ID})
+	assertToolError(t, session, "skip_seed", map[string]any{"seedId": listed.Items[2].ID, "expectedStatus": "inbox"})
+	assertToolError(t, session, "skip_seed", map[string]any{"seedId": listed.Items[2].ID, "expectedStatus": "doing", "claimToken": "other-agent-claim"})
+	skipDoingArgs := map[string]any{"seedId": listed.Items[2].ID, "expectedStatus": "doing", "claimToken": lowClaimToken}
+	skipDoingResult := callTool(t, session, "skip_seed", skipDoingArgs)
 	var skippedDoing transitionOutput
 	decodeStructured(t, skipDoingResult.StructuredContent, &skippedDoing)
 	if skippedDoing.Seed.Status != "skipped" || skippedDoing.Seed.StartedAt == nil {
 		t.Fatalf("skipped doing seed = %#v", skippedDoing.Seed)
+	}
+	duplicateDoingSkip := callTool(t, session, "skip_seed", skipDoingArgs)
+	var skippedDoingAgain transitionOutput
+	decodeStructured(t, duplicateDoingSkip.StructuredContent, &skippedDoingAgain)
+	if skippedDoingAgain.Seed.Status != "skipped" {
+		t.Fatalf("idempotent doing skip seed = %#v", skippedDoingAgain.Seed)
+	}
+	claimedSkippedResult := callTool(t, session, "get_seed", map[string]any{"seedId": listed.Items[2].ID, "claimToken": lowClaimToken})
+	var claimedSkipped getSeedOutput
+	decodeStructured(t, claimedSkippedResult.StructuredContent, &claimedSkipped)
+	if claimedSkipped.Seed.Status != "skipped" || !claimedSkipped.ClaimedByCaller {
+		t.Fatalf("claimed skipped seed = %#v", claimedSkipped)
 	}
 }
 
@@ -183,6 +204,17 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, arguments m
 		t.Fatalf("tool %s failed: %#v", name, result.Content)
 	}
 	return result
+}
+
+func assertToolError(t *testing.T, session *mcp.ClientSession, name string, arguments map[string]any) {
+	t.Helper()
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("tool %s unexpectedly succeeded: %#v", name, result.StructuredContent)
+	}
 }
 
 func decodeStructured(t *testing.T, input any, output any) {

@@ -65,6 +65,9 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	if stepByStep.CompletedAt != nil || stepByStep.DurationSec != nil {
 		t.Fatal("entering doing unexpectedly recorded completion data")
 	}
+	if _, err := db.Exec(`UPDATE seeds SET claim_token='agent-claim' WHERE id=?`, stepByStep.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := db.Exec(`UPDATE seeds SET started_at=datetime(CURRENT_TIMESTAMP, '-3661 seconds') WHERE id=?`, stepByStep.ID); err != nil {
 		t.Fatal(err)
@@ -75,6 +78,20 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	}
 	if stepByStep.DurationSec == nil || *stepByStep.DurationSec != 3661 {
 		t.Fatalf("duration = %v, want 3661 seconds", stepByStep.DurationSec)
+	}
+	var retainedClaimToken *string
+	if err := db.QueryRow(`SELECT claim_token FROM seeds WHERE id=?`, stepByStep.ID).Scan(&retainedClaimToken); err != nil {
+		t.Fatal(err)
+	}
+	if retainedClaimToken == nil || *retainedClaimToken != "agent-claim" {
+		t.Fatalf("claim token was not retained when completing: %v", retainedClaimToken)
+	}
+	stepByStep = patchStatus(stepByStep, "inbox")
+	if err := db.QueryRow(`SELECT claim_token FROM seeds WHERE id=?`, stepByStep.ID).Scan(&retainedClaimToken); err != nil {
+		t.Fatal(err)
+	}
+	if retainedClaimToken != nil {
+		t.Fatalf("claim token was not cleared when reopening: %v", *retainedClaimToken)
 	}
 }
 

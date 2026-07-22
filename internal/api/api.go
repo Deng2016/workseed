@@ -259,8 +259,19 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 				WHEN ?<>'done' THEN NULL
 				ELSE duration_seconds
 			END,
+			claim_token=CASE
+				WHEN ?=status THEN claim_token
+				WHEN status='doing' AND ? IN ('done', 'skipped') THEN claim_token
+				ELSE NULL
+			END,
 			status=?, title=?, content=?, priority=?, updated_at=CURRENT_TIMESTAMP
-			WHERE id=?`, in.Type, in.Status, in.Status, in.Status, in.Status, in.Status, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, id)
+			WHERE id=?`,
+			in.Type,
+			in.Status,
+			in.Status, in.Status,
+			in.Status, in.Status,
+			in.Status, in.Status,
+			in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, id)
 		if err != nil {
 			problem(w, 500, err.Error())
 			return

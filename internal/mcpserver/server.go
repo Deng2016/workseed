@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	defaultListLimit = 20
-	maximumListLimit = 100
+	defaultListLimit    = 20
+	maximumListLimit    = 100
+	maxClaimTokenLength = 128
 )
 
 type listSeedsInput struct {
@@ -24,8 +25,20 @@ type listSeedsInput struct {
 	Limit     int    `json:"limit,omitempty" jsonschema:"最多返回的事种数量，默认 20，最大 100"`
 }
 
-type seedIDInput struct {
-	SeedID int64 `json:"seedId" jsonschema:"事种 ID"`
+type getSeedInput struct {
+	SeedID     int64  `json:"seedId" jsonschema:"事种 ID"`
+	ClaimToken string `json:"claimToken,omitempty" jsonschema:"可选；当前 Agent 为领取操作生成的唯一令牌，用于确认所有权"`
+}
+
+type claimSeedInput struct {
+	SeedID     int64  `json:"seedId" jsonschema:"事种 ID"`
+	ClaimToken string `json:"claimToken" jsonschema:"当前 Agent 为本次领取生成并在后续操作中重复使用的唯一令牌"`
+}
+
+type skipSeedInput struct {
+	SeedID         int64  `json:"seedId" jsonschema:"事种 ID"`
+	ExpectedStatus string `json:"expectedStatus" jsonschema:"期望的当前状态：inbox、doing 或 paused；状态不匹配时拒绝跳过"`
+	ClaimToken     string `json:"claimToken,omitempty" jsonschema:"expectedStatus 为 doing 时必填，必须与领取令牌一致"`
 }
 
 type seedOutput struct {
@@ -49,6 +62,11 @@ type listSeedsOutput struct {
 	Count int          `json:"count"`
 }
 
+type getSeedOutput struct {
+	Seed            seedOutput `json:"seed"`
+	ClaimedByCaller bool       `json:"claimedByCaller"`
+}
+
 type transitionOutput struct {
 	Message string     `json:"message"`
 	Seed    seedOutput `json:"seed"`
@@ -58,7 +76,7 @@ type transitionOutput struct {
 func Handler(db *sql.DB) http.Handler {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "workseed", Version: buildversion.Current()},
-		&mcp.ServerOptions{Instructions: "先调用 list_seeds 按优先级获取待处理事种。处理前调用 start_seed；工作完成后调用 complete_seed；条件不完整或处理失败时调用 skip_seed。工具结果不确定时调用 get_seed 精确确认状态。不要处理未成功进入 doing 状态的事种。"},
+		&mcp.ServerOptions{Instructions: "先调用 list_seeds 按优先级获取待处理事种。每条事种生成唯一 claimToken，使用同一令牌调用 start_seed、get_seed、complete_seed 及处理失败后的 skip_seed。领取前跳过必须指定 expectedStatus=inbox。工具结果不确定时调用 get_seed 确认状态和 claimedByCaller。"},
 	)
 
 	closedWorld := false
@@ -81,30 +99,31 @@ func Handler(db *sql.DB) http.Handler {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_seed",
-		Description: "按 ID 获取一条事种的最新信息。用于精确确认项目归属和当前状态。",
+		Description: "按 ID 获取一条事种的最新信息。传入 claimToken 时同时确认该事种是否由当前调用方领取，但不会回显服务端保存的令牌。",
 		Annotations: &mcp.ToolAnnotations{
 			Title:         "获取事种详情",
 			ReadOnlyHint:  true,
 			OpenWorldHint: &closedWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seedIDInput) (*mcp.CallToolResult, seedOutput, error) {
-		item, err := getSeed(ctx, db, input.SeedID)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input getSeedInput) (*mcp.CallToolResult, getSeedOutput, error) {
+		output, err := getSeed(ctx, db, input)
 		if err != nil {
-			return nil, seedOutput{}, err
+			return nil, getSeedOutput{}, err
 		}
-		return nil, item, nil
+		return nil, output, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "start_seed",
-		Description: "领取一条待实现事种并将状态原子地改为进行中，同时记录开始时间。只有 inbox 状态可以开始。",
+		Description: "使用唯一 claimToken 原子领取一条 inbox 事种并改为 doing。相同令牌重复调用保持成功，其他令牌不能接管。",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "开始处理事种",
 			DestructiveHint: &nonDestructive,
+			IdempotentHint:  true,
 			OpenWorldHint:   &closedWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seedIDInput) (*mcp.CallToolResult, transitionOutput, error) {
-		item, err := transitionSeed(ctx, db, input.SeedID, "inbox", "doing")
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input claimSeedInput) (*mcp.CallToolResult, transitionOutput, error) {
+		item, err := startSeed(ctx, db, input)
 		if err != nil {
 			return nil, transitionOutput{}, err
 		}
@@ -113,14 +132,15 @@ func Handler(db *sql.DB) http.Handler {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "complete_seed",
-		Description: "将一条进行中的事种改为已完成，同时记录完成时间并在有开始时间时计算耗时。只有 doing 状态可以完成。",
+		Description: "使用领取时的 claimToken 将 doing 事种改为 done。仅领取者可以完成，相同令牌重复调用保持成功。",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "完成事种",
 			DestructiveHint: &nonDestructive,
+			IdempotentHint:  true,
 			OpenWorldHint:   &closedWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seedIDInput) (*mcp.CallToolResult, transitionOutput, error) {
-		item, err := transitionSeed(ctx, db, input.SeedID, "doing", "done")
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input claimSeedInput) (*mcp.CallToolResult, transitionOutput, error) {
+		item, err := completeSeed(ctx, db, input)
 		if err != nil {
 			return nil, transitionOutput{}, err
 		}
@@ -129,15 +149,15 @@ func Handler(db *sql.DB) http.Handler {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "skip_seed",
-		Description: "将一条待实现、进行中或已暂停的事种改为已跳过。用于条件不完整、无法实施或多次尝试仍失败的事种。",
+		Description: "在当前状态与 expectedStatus 原子匹配时将事种改为 skipped。跳过 doing 事种还必须提供领取时的 claimToken。",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "跳过事种",
 			DestructiveHint: &nonDestructive,
 			IdempotentHint:  true,
 			OpenWorldHint:   &closedWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input seedIDInput) (*mcp.CallToolResult, transitionOutput, error) {
-		item, err := skipSeed(ctx, db, input.SeedID)
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input skipSeedInput) (*mcp.CallToolResult, transitionOutput, error) {
+		item, err := skipSeed(ctx, db, input)
 		if err != nil {
 			return nil, transitionOutput{}, err
 		}
@@ -204,25 +224,34 @@ func listSeeds(ctx context.Context, db *sql.DB, input listSeedsInput) ([]seedOut
 	return items, nil
 }
 
-func getSeed(ctx context.Context, db *sql.DB, seedID int64) (seedOutput, error) {
-	if seedID < 1 {
-		return seedOutput{}, errors.New("seedId 必须是正整数")
+func getSeed(ctx context.Context, db *sql.DB, input getSeedInput) (getSeedOutput, error) {
+	if input.SeedID < 1 {
+		return getSeedOutput{}, errors.New("seedId 必须是正整数")
+	}
+	claimToken, err := normalizeOptionalClaimToken(input.ClaimToken)
+	if err != nil {
+		return getSeedOutput{}, err
 	}
 	var item seedOutput
-	err := scanSeed(db.QueryRowContext(ctx, `SELECT `+seedColumns+`
-		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, seedID), &item)
+	var storedClaimToken sql.NullString
+	err = scanSeedWithClaim(db.QueryRowContext(ctx, `SELECT `+seedColumns+`, s.claim_token
+		FROM seeds s JOIN projects p ON p.id = s.project_id WHERE s.id = ?`, input.SeedID), &item, &storedClaimToken)
 	if errors.Is(err, sql.ErrNoRows) {
-		return seedOutput{}, fmt.Errorf("事种 %d 不存在", seedID)
+		return getSeedOutput{}, fmt.Errorf("事种 %d 不存在", input.SeedID)
 	}
 	if err != nil {
-		return seedOutput{}, err
+		return getSeedOutput{}, err
 	}
-	return item, nil
+	return getSeedOutput{
+		Seed:            item,
+		ClaimedByCaller: claimToken != "" && claimTokenMatches(storedClaimToken, claimToken),
+	}, nil
 }
 
-func transitionSeed(ctx context.Context, db *sql.DB, seedID int64, fromStatus, toStatus string) (seedOutput, error) {
-	if seedID < 1 {
-		return seedOutput{}, errors.New("seedId 必须是正整数")
+func startSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOutput, error) {
+	claimToken, err := validateClaimInput(input)
+	if err != nil {
+		return seedOutput{}, err
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -230,93 +259,178 @@ func transitionSeed(ctx context.Context, db *sql.DB, seedID int64, fromStatus, t
 	}
 	defer tx.Rollback()
 
-	var currentStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM seeds WHERE id = ?`, seedID).Scan(&currentStatus); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return seedOutput{}, fmt.Errorf("事种 %d 不存在", seedID)
-		}
-		return seedOutput{}, err
-	}
-	if currentStatus != fromStatus {
-		return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，只有 %s 状态可以改为 %s", seedID, currentStatus, fromStatus, toStatus)
-	}
-
-	var update string
-	switch toStatus {
-	case "doing":
-		update = `UPDATE seeds SET status = 'doing',
-			started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
-			completed_at = NULL, duration_seconds = NULL, updated_at = CURRENT_TIMESTAMP
-			WHERE id = ? AND status = 'inbox'`
-	case "done":
-		update = `UPDATE seeds SET status = 'done', completed_at = CURRENT_TIMESTAMP,
-			duration_seconds = CASE WHEN started_at IS NOT NULL
-				THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END,
-			updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'doing'`
-	default:
-		return seedOutput{}, fmt.Errorf("不支持的目标状态 %s", toStatus)
-	}
-	result, err := tx.ExecContext(ctx, update, seedID)
+	currentStatus, storedClaimToken, err := readSeedClaim(ctx, tx, input.SeedID)
 	if err != nil {
 		return seedOutput{}, err
 	}
+	if currentStatus == "doing" && claimTokenMatches(storedClaimToken, claimToken) {
+		return commitSeedRead(ctx, tx, input.SeedID)
+	}
+	if currentStatus != "inbox" {
+		return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，不能使用此 claimToken 领取", input.SeedID, currentStatus)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'doing', claim_token = ?,
+		started_at = CURRENT_TIMESTAMP, completed_at = NULL, duration_seconds = NULL, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = 'inbox'`, claimToken, input.SeedID)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if err := requireSingleRow(result, input.SeedID); err != nil {
+		return seedOutput{}, err
+	}
+	return commitSeedRead(ctx, tx, input.SeedID)
+}
+
+func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOutput, error) {
+	claimToken, err := validateClaimInput(input)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	defer tx.Rollback()
+
+	currentStatus, storedClaimToken, err := readSeedClaim(ctx, tx, input.SeedID)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if currentStatus == "done" && claimTokenMatches(storedClaimToken, claimToken) {
+		return commitSeedRead(ctx, tx, input.SeedID)
+	}
+	if currentStatus != "doing" {
+		return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，不能标记为已完成", input.SeedID, currentStatus)
+	}
+	if !claimTokenMatches(storedClaimToken, claimToken) {
+		return seedOutput{}, fmt.Errorf("事种 %d 不属于当前 claimToken", input.SeedID)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'done', completed_at = CURRENT_TIMESTAMP,
+		duration_seconds = CASE WHEN started_at IS NOT NULL
+			THEN MAX(0, unixepoch(CURRENT_TIMESTAMP) - unixepoch(started_at)) ELSE NULL END,
+		updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'doing' AND claim_token = ?`, input.SeedID, claimToken)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if err := requireSingleRow(result, input.SeedID); err != nil {
+		return seedOutput{}, err
+	}
+	return commitSeedRead(ctx, tx, input.SeedID)
+}
+
+func skipSeed(ctx context.Context, db *sql.DB, input skipSeedInput) (seedOutput, error) {
+	if input.SeedID < 1 {
+		return seedOutput{}, errors.New("seedId 必须是正整数")
+	}
+	expectedStatus := strings.TrimSpace(input.ExpectedStatus)
+	if expectedStatus != "inbox" && expectedStatus != "doing" && expectedStatus != "paused" {
+		return seedOutput{}, errors.New("expectedStatus 必须是 inbox、doing 或 paused")
+	}
+	claimToken, err := normalizeOptionalClaimToken(input.ClaimToken)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if expectedStatus == "doing" && claimToken == "" {
+		return seedOutput{}, errors.New("跳过 doing 事种时 claimToken 必填")
+	}
+	if expectedStatus != "doing" && claimToken != "" {
+		return seedOutput{}, errors.New("只有跳过 doing 事种时才可传入 claimToken")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	defer tx.Rollback()
+	currentStatus, storedClaimToken, err := readSeedClaim(ctx, tx, input.SeedID)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if currentStatus == "skipped" {
+		if expectedStatus == "doing" && !claimTokenMatches(storedClaimToken, claimToken) {
+			return seedOutput{}, fmt.Errorf("事种 %d 不属于当前 claimToken", input.SeedID)
+		}
+		return commitSeedRead(ctx, tx, input.SeedID)
+	}
+	if currentStatus != expectedStatus {
+		return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，与 expectedStatus=%s 不匹配", input.SeedID, currentStatus, expectedStatus)
+	}
+	if expectedStatus == "doing" && !claimTokenMatches(storedClaimToken, claimToken) {
+		return seedOutput{}, fmt.Errorf("事种 %d 不属于当前 claimToken", input.SeedID)
+	}
+
+	query := `UPDATE seeds SET status = 'skipped', completed_at = NULL, duration_seconds = NULL,
+		claim_token = CASE WHEN ? = 'doing' THEN claim_token ELSE NULL END, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = ?`
+	args := []any{expectedStatus, input.SeedID, expectedStatus}
+	if expectedStatus == "doing" {
+		query += ` AND claim_token = ?`
+		args = append(args, claimToken)
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	if err := requireSingleRow(result, input.SeedID); err != nil {
+		return seedOutput{}, err
+	}
+	return commitSeedRead(ctx, tx, input.SeedID)
+}
+
+func validateClaimInput(input claimSeedInput) (string, error) {
+	if input.SeedID < 1 {
+		return "", errors.New("seedId 必须是正整数")
+	}
+	return normalizeClaimToken(input.ClaimToken)
+}
+
+func normalizeClaimToken(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("claimToken 必填")
+	}
+	if len(value) > maxClaimTokenLength {
+		return "", fmt.Errorf("claimToken 长度不能超过 %d", maxClaimTokenLength)
+	}
+	return value, nil
+}
+
+func normalizeOptionalClaimToken(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	return normalizeClaimToken(value)
+}
+
+func claimTokenMatches(stored sql.NullString, claimToken string) bool {
+	return stored.Valid && stored.String == claimToken
+}
+
+func readSeedClaim(ctx context.Context, tx *sql.Tx, seedID int64) (string, sql.NullString, error) {
+	var status string
+	var claimToken sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT status, claim_token FROM seeds WHERE id = ?`, seedID).Scan(&status, &claimToken); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", sql.NullString{}, fmt.Errorf("事种 %d 不存在", seedID)
+		}
+		return "", sql.NullString{}, err
+	}
+	return status, claimToken, nil
+}
+
+func requireSingleRow(result sql.Result, seedID int64) error {
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return seedOutput{}, err
+		return err
 	}
 	if affected != 1 {
-		return seedOutput{}, fmt.Errorf("事种 %d 状态已发生变化，请重新获取事种列表", seedID)
+		return fmt.Errorf("事种 %d 状态已发生变化，请重新获取事种详情", seedID)
 	}
-
-	item, err := readSeed(ctx, tx, seedID)
-	if err != nil {
-		return seedOutput{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return seedOutput{}, err
-	}
-	return item, nil
+	return nil
 }
 
-func skipSeed(ctx context.Context, db *sql.DB, seedID int64) (seedOutput, error) {
-	if seedID < 1 {
-		return seedOutput{}, errors.New("seedId 必须是正整数")
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return seedOutput{}, err
-	}
-	defer tx.Rollback()
-
-	var currentStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM seeds WHERE id = ?`, seedID).Scan(&currentStatus); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return seedOutput{}, fmt.Errorf("事种 %d 不存在", seedID)
-		}
-		return seedOutput{}, err
-	}
-	if currentStatus == "done" {
-		return seedOutput{}, fmt.Errorf("事种 %d 已完成，不能标记为已跳过", seedID)
-	}
-	if currentStatus != "skipped" {
-		if currentStatus != "inbox" && currentStatus != "doing" && currentStatus != "paused" {
-			return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，不能标记为已跳过", seedID, currentStatus)
-		}
-		result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'skipped',
-			completed_at = NULL, duration_seconds = NULL, updated_at = CURRENT_TIMESTAMP
-			WHERE id = ? AND status = ?`, seedID, currentStatus)
-		if err != nil {
-			return seedOutput{}, err
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return seedOutput{}, err
-		}
-		if affected != 1 {
-			return seedOutput{}, fmt.Errorf("事种 %d 状态已发生变化，请重新获取事种列表", seedID)
-		}
-	}
-
+func commitSeedRead(ctx context.Context, tx *sql.Tx, seedID int64) (seedOutput, error) {
 	item, err := readSeed(ctx, tx, seedID)
 	if err != nil {
 		return seedOutput{}, err
@@ -338,6 +452,12 @@ func scanSeed(row seedScanner, item *seedOutput) error {
 	return row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
 		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
 		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds)
+}
+
+func scanSeedWithClaim(row seedScanner, item *seedOutput, claimToken *sql.NullString) error {
+	return row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
+		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
+		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds, claimToken)
 }
 
 func readSeed(ctx context.Context, tx *sql.Tx, seedID int64) (seedOutput, error) {
