@@ -66,7 +66,7 @@ build_windows() {
   local stage="$STAGING_DIR/$package_name"
   mkdir -p "$stage"
   printf '==> 构建 Windows %s amd64\n' "$windows_version"
-  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$stage/workseed.exe" ./cmd/workseed
+  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w -H=windowsgui' -o "$stage/workseed.exe" ./cmd/workseed
   cp README.md "$stage/README.md"
   create_windows_zip "$stage" "$OUTPUT_DIR/${package_name}.zip"
 }

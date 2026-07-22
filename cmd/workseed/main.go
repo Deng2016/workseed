@@ -23,6 +23,16 @@ const (
 )
 
 func main() {
+	releaseInstance, acquired, err := acquireSingleInstance()
+	if err != nil {
+		log.Fatalf("acquire single-instance lock: %v", err)
+	}
+	if !acquired {
+		log.Print("Workseed is already running")
+		return
+	}
+	defer releaseInstance()
+
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		log.Fatalf("create data directory: %v", err)
 	}
