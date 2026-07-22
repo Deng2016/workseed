@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"workseed/internal/utctime"
 	buildversion "workseed/internal/version"
 	"workseed/internal/worktime"
 )
@@ -467,15 +468,38 @@ type seedScanner interface {
 }
 
 func scanSeed(row seedScanner, item *seedOutput) error {
-	return row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
 		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
-		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds)
+		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds); err != nil {
+		return err
+	}
+	return normalizeSeedTimes(item)
 }
 
 func scanSeedWithClaim(row seedScanner, item *seedOutput, claimToken *sql.NullString) error {
-	return row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
 		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
-		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds, claimToken)
+		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds, claimToken); err != nil {
+		return err
+	}
+	return normalizeSeedTimes(item)
+}
+
+func normalizeSeedTimes(item *seedOutput) error {
+	for _, value := range []*string{&item.CreatedAt, &item.UpdatedAt} {
+		formatted, err := utctime.FormatRFC3339(*value)
+		if err != nil {
+			return err
+		}
+		*value = formatted
+	}
+	var err error
+	item.StartedAt, err = utctime.FormatOptionalRFC3339(item.StartedAt)
+	if err != nil {
+		return err
+	}
+	item.CompletedAt, err = utctime.FormatOptionalRFC3339(item.CompletedAt)
+	return err
 }
 
 func readSeed(ctx context.Context, tx *sql.Tx, seedID int64) (seedOutput, error) {

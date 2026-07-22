@@ -294,7 +294,8 @@ function statusLabel(value: SeedStatus) { return statuses.find(s => s.value === 
 function projectName(id: number) { return projects.value.find(project => project.id === id)?.name ?? '未知项目' }
 function parseStoredTime(value?: string | null) {
   if (!value) return null
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T') + 'Z'
+  const timestamp = value.trim().replace(' ', 'T')
+  const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`
   const date = new Date(normalized)
   return Number.isNaN(date.getTime()) ? null : date
 }

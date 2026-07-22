@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"workseed/internal/mcpserver"
+	"workseed/internal/utctime"
 	buildversion "workseed/internal/version"
 	"workseed/internal/worktime"
 )
@@ -590,7 +591,10 @@ type seedScanner interface {
 }
 
 func scanSeed(row seedScanner, item *seed) error {
-	return row.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.StartedAt, &item.CompletedAt, &item.DurationSec)
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.StartedAt, &item.CompletedAt, &item.DurationSec); err != nil {
+		return err
+	}
+	return normalizeSeedTimes(item)
 }
 
 func (s *server) readSeed(id int64, item *seed) error {
@@ -599,7 +603,32 @@ func (s *server) readSeed(id int64, item *seed) error {
 }
 
 func scanProject(row seedScanner, item *project) error {
-	return row.Scan(&item.ID, &item.Name, &item.Description, &item.CreatedAt, &item.Archived, &item.SeedCount)
+	if err := row.Scan(&item.ID, &item.Name, &item.Description, &item.CreatedAt, &item.Archived, &item.SeedCount); err != nil {
+		return err
+	}
+	formatted, err := utctime.FormatRFC3339(item.CreatedAt)
+	if err != nil {
+		return err
+	}
+	item.CreatedAt = formatted
+	return nil
+}
+
+func normalizeSeedTimes(item *seed) error {
+	for _, value := range []*string{&item.CreatedAt, &item.UpdatedAt} {
+		formatted, err := utctime.FormatRFC3339(*value)
+		if err != nil {
+			return err
+		}
+		*value = formatted
+	}
+	var err error
+	item.StartedAt, err = utctime.FormatOptionalRFC3339(item.StartedAt)
+	if err != nil {
+		return err
+	}
+	item.CompletedAt, err = utctime.FormatOptionalRFC3339(item.CompletedAt)
+	return err
 }
 
 func (s *server) readProject(id int64, item *project) error {

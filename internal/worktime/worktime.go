@@ -1,12 +1,15 @@
 package worktime
 
-import "time"
+import (
+	"time"
+
+	"workseed/internal/utctime"
+)
 
 const (
-	storedTimeLayout = "2006-01-02 15:04:05"
-	clockLayout      = "15:04"
-	DefaultStart     = "10:00"
-	DefaultEnd       = "19:00"
+	clockLayout  = "15:04"
+	DefaultStart = "10:00"
+	DefaultEnd   = "19:00"
 )
 
 // DurationSeconds returns the working time between two UTC timestamps stored by
@@ -18,11 +21,11 @@ func DurationSeconds(startedAt, completedAt string) (int64, error) {
 // DurationSecondsForSchedule returns working time using the supplied local
 // workday boundaries in HH:MM format.
 func DurationSecondsForSchedule(startedAt, completedAt, workdayStart, workdayEnd string) (int64, error) {
-	started, err := time.ParseInLocation(storedTimeLayout, startedAt, time.UTC)
+	started, err := utctime.Parse(startedAt)
 	if err != nil {
 		return 0, err
 	}
-	completed, err := time.ParseInLocation(storedTimeLayout, completedAt, time.UTC)
+	completed, err := utctime.Parse(completedAt)
 	if err != nil {
 		return 0, err
 	}

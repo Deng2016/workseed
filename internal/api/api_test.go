@@ -7,13 +7,17 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"workseed/internal/store"
+	"workseed/internal/utctime"
 	"workseed/internal/worktime"
 )
 
 func TestSeedStatusTimestampsAndDuration(t *testing.T) {
+	testStartedAt := time.Now().UTC().Add(-2 * time.Second)
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -49,12 +53,15 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	}
 
 	direct := patchStatus(create("直接完成"), "done")
+	assertRFC3339UTC(t, direct.CreatedAt)
+	assertRFC3339UTC(t, direct.UpdatedAt)
 	if direct.StartedAt != nil {
 		t.Fatalf("direct completion unexpectedly recorded a start time: %v", *direct.StartedAt)
 	}
 	if direct.CompletedAt == nil {
 		t.Fatal("direct completion did not record a completion time")
 	}
+	assertRFC3339UTC(t, *direct.CompletedAt)
 	if direct.DurationSec != nil {
 		t.Fatalf("direct completion unexpectedly calculated duration: %d", *direct.DurationSec)
 	}
@@ -63,6 +70,7 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	if stepByStep.StartedAt == nil {
 		t.Fatal("entering doing did not record a start time")
 	}
+	assertRFC3339UTC(t, *stepByStep.StartedAt)
 	if stepByStep.CompletedAt != nil || stepByStep.DurationSec != nil {
 		t.Fatal("entering doing unexpectedly recorded completion data")
 	}
@@ -77,12 +85,27 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	if stepByStep.CompletedAt == nil {
 		t.Fatal("entering done did not record a completion time")
 	}
+	assertRFC3339UTC(t, *stepByStep.CompletedAt)
 	wantDuration, err := worktime.DurationSeconds(*stepByStep.StartedAt, *stepByStep.CompletedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stepByStep.DurationSec == nil || *stepByStep.DurationSec != wantDuration {
 		t.Fatalf("duration = %v, want %d seconds", stepByStep.DurationSec, wantDuration)
+	}
+	var storedCreatedAt, storedUpdatedAt, storedCompletedAt string
+	if err := db.QueryRow(`SELECT created_at, updated_at, completed_at FROM seeds WHERE id=?`, direct.ID).
+		Scan(&storedCreatedAt, &storedUpdatedAt, &storedCompletedAt); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{storedCreatedAt, storedUpdatedAt, storedCompletedAt} {
+		stored, err := time.ParseInLocation(utctime.DatabaseLayout, value, time.UTC)
+		if err != nil {
+			t.Fatalf("database timestamp %q: %v", value, err)
+		}
+		if stored.Before(testStartedAt) || stored.After(time.Now().UTC().Add(2*time.Second)) {
+			t.Fatalf("database timestamp %q is outside the UTC test window", value)
+		}
 	}
 	var retainedClaimToken *string
 	if err := db.QueryRow(`SELECT claim_token FROM seeds WHERE id=?`, stepByStep.ID).Scan(&retainedClaimToken); err != nil {
@@ -668,6 +691,17 @@ func TestAppVersion(t *testing.T) {
 	}
 	if output["version"] == "" {
 		t.Fatal("version is empty")
+	}
+}
+
+func assertRFC3339UTC(t *testing.T, value string) {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("timestamp %q is not RFC 3339: %v", value, err)
+	}
+	if !strings.HasSuffix(value, "Z") || parsed.Location() != time.UTC {
+		t.Fatalf("timestamp %q is not explicit UTC", value)
 	}
 }
 

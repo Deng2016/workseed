@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -79,6 +81,8 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if listed.Items[0].ProjectName != "Agent 项目二" {
 		t.Fatalf("project name = %q, want Agent 项目二", listed.Items[0].ProjectName)
 	}
+	assertRFC3339UTC(t, listed.Items[0].CreatedAt)
+	assertRFC3339UTC(t, listed.Items[0].UpdatedAt)
 
 	highPriorityID := listed.Items[0].ID
 	highClaimToken := "agent-high-claim"
@@ -105,6 +109,7 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if started.Seed.Status != "doing" || started.Seed.StartedAt == nil {
 		t.Fatalf("started seed = %#v", started.Seed)
 	}
+	assertRFC3339UTC(t, *started.Seed.StartedAt)
 	doingResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var fetchedDoing getSeedOutput
 	decodeStructured(t, doingResult.StructuredContent, &fetchedDoing)
@@ -136,6 +141,7 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	if completed.Seed.Status != "done" || completed.Seed.CompletedAt == nil {
 		t.Fatalf("completed seed = %#v", completed.Seed)
 	}
+	assertRFC3339UTC(t, *completed.Seed.CompletedAt)
 	wantDuration, err := worktime.DurationSeconds(*completed.Seed.StartedAt, *completed.Seed.CompletedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +245,17 @@ func TestArchivedProjectsAreExcludedFromMCP(t *testing.T) {
 	}
 	if _, err := startSeed(context.Background(), db, claimSeedInput{SeedID: archivedSeedID, ClaimToken: "archived-project-test"}); err == nil {
 		t.Fatal("archived seed remained claimable")
+	}
+}
+
+func assertRFC3339UTC(t *testing.T, value string) {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("timestamp %q is not RFC 3339: %v", value, err)
+	}
+	if !strings.HasSuffix(value, "Z") || parsed.Location() != time.UTC {
+		t.Fatalf("timestamp %q is not explicit UTC", value)
 	}
 }
 
