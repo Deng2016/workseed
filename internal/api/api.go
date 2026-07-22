@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -109,6 +110,20 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		queryValues := r.URL.Query()
+		page, err := parsePositiveQueryInt(queryValues.Get("page"), 1)
+		if err != nil {
+			problem(w, 400, "无效的页码")
+			return
+		}
+		pageSize, err := parsePositiveQueryInt(queryValues.Get("pageSize"), 20)
+		if err != nil || pageSize > 100 {
+			problem(w, 400, "无效的每页数量（范围为 1-100）")
+			return
+		}
+		if page-1 > math.MaxInt64/pageSize {
+			problem(w, 400, "页码过大")
+			return
+		}
 		kinds, kindsSupplied, err := parseMultiFilter(queryValues, "type", []string{"idea", "feature", "todo", "bug"})
 		if err != nil {
 			problem(w, 400, "无效的种子类型")
@@ -124,12 +139,19 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "无效的优先级")
 			return
 		}
-		query := `SELECT ` + seedColumns + ` FROM seeds WHERE project_id = ?`
+		where := ` WHERE project_id = ?`
 		args := []any{projectID}
-		query, args = appendMultiFilter(query, args, "type", kinds, kindsSupplied)
-		query, args = appendMultiFilter(query, args, "status", statuses, statusesSupplied)
-		query, args = appendMultiFilter(query, args, "priority", priorities, prioritiesSupplied)
-		query += ` ORDER BY created_at DESC, id DESC`
+		where, args = appendMultiFilter(where, args, "type", kinds, kindsSupplied)
+		where, args = appendMultiFilter(where, args, "status", statuses, statusesSupplied)
+		where, args = appendMultiFilter(where, args, "priority", priorities, prioritiesSupplied)
+		var filteredTotal int64
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM seeds`+where, args...).Scan(&filteredTotal); err != nil {
+			problem(w, 500, err.Error())
+			return
+		}
+		offset := (page - 1) * pageSize
+		query := `SELECT ` + seedColumns + ` FROM seeds` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+		args = append(args, pageSize, offset)
 		rows, err := s.db.Query(query, args...)
 		if err != nil {
 			problem(w, 500, err.Error())
@@ -157,6 +179,11 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 500, err.Error())
 			return
 		}
+		hasMore := offset < filteredTotal && int64(len(items)) < filteredTotal-offset
+		w.Header().Set("X-Seed-Page", strconv.FormatInt(page, 10))
+		w.Header().Set("X-Seed-Page-Size", strconv.FormatInt(pageSize, 10))
+		w.Header().Set("X-Seed-Filtered-Total", strconv.FormatInt(filteredTotal, 10))
+		w.Header().Set("X-Seed-Has-More", strconv.FormatBool(hasMore))
 		writeJSON(w, 200, items)
 	case http.MethodPost:
 		var in seed
@@ -364,6 +391,17 @@ func parseOptionalTime(value string) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func parsePositiveQueryInt(value string, defaultValue int64) (int64, error) {
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 1 {
+		return 0, errors.New("value must be a positive integer")
+	}
+	return parsed, nil
 }
 
 func isProjectNameConflict(err error) bool {

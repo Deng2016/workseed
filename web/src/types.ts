@@ -23,7 +23,14 @@ export interface SeedCounts {
   low: number
 }
 
-export interface SeedListResult { items: Seed[]; counts: SeedCounts }
+export interface SeedListResult {
+  items: Seed[]
+  counts: SeedCounts
+  page: number
+  pageSize: number
+  total: number
+  hasMore: boolean
+}
 
 export interface Seed {
   id: number

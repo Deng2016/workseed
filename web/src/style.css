@@ -563,11 +563,18 @@ textarea:focus {
     outline-offset: 1px;
 }
 
+.list-timestamps {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: 14px;
+}
+
 .list-timestamp {
-    margin-left: 14px;
-    color: #7c877e;
-    text-transform: none;
-    white-space: nowrap;
+  color: #7c877e;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .seed-main {
@@ -629,6 +636,14 @@ textarea:focus {
 
 .empty button {
     margin-top: 10px;
+}
+
+.load-more-status {
+    min-height: 72px;
+    display: grid;
+    place-items: center;
+    color: #8a938b;
+    font-size: 12px;
 }
 
 .seed-list {

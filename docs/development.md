@@ -118,12 +118,14 @@ cp -a ./data ./data-backup
 | --- | --- | --- |
 | `GET` | `/api/projects` | 获取项目列表 |
 | `POST` | `/api/projects` | 创建项目 |
-| `GET` | `/api/seeds?projectId=1&type=idea&type=todo&status=inbox&status=doing&priority=high` | 获取并过滤种子 |
+| `GET` | `/api/seeds?projectId=1&type=idea&type=todo&status=inbox&status=doing&priority=high&page=1&pageSize=20` | 分页获取并过滤种子（默认每页 20 条） |
 | `POST` | `/api/seeds` | 创建种子 |
 | `PATCH` | `/api/seeds/{id}` | 更新种子 |
 | `DELETE` | `/api/seeds/{id}` | 删除种子 |
 | `GET` | `/api/worklogs?startTime=...&endTime=...` | 按完成时间获取工作日志 |
 | `GET` | `/api/version` | 获取当前程序版本 |
+
+种子列表接口的 `page` 默认为 `1`，`pageSize` 默认为 `20`、最大为 `100`。响应体仍为种子数组，分页信息通过 `X-Seed-Page`、`X-Seed-Page-Size`、`X-Seed-Filtered-Total` 和 `X-Seed-Has-More` 响应头返回。
 
 创建项目示例：
 

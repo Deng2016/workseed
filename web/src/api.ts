@@ -18,8 +18,8 @@ export const api = {
   projects: () => request<Project[]>('/api/projects'),
   createProject: (input: Pick<Project, 'name' | 'description'>) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
-  seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[]): Promise<SeedListResult> => {
-    const query = new URLSearchParams({ projectId: String(projectId) })
+  seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[], page = 1, pageSize = 20): Promise<SeedListResult> => {
+    const query = new URLSearchParams({ projectId: String(projectId), page: String(page), pageSize: String(pageSize) })
     const addFilter = (name: string, values: string[]) => {
       if (!values.length) query.set(name, '')
       else values.forEach(value => query.append(name, value))
@@ -39,7 +39,11 @@ export const api = {
       total: readCount("Total"), idea: readCount("Idea"), feature: readCount("Feature"),
       todo: readCount("Todo"), bug: readCount("Bug"), inbox: readCount("Inbox"), doing: readCount("Doing"), done: readCount("Done"),
       high: readCount("High"), middle: readCount("Middle"), low: readCount("Low"),
-    } }
+    }, page: Number(response.headers.get('X-Seed-Page') || page),
+      pageSize: Number(response.headers.get('X-Seed-Page-Size') || pageSize),
+      total: Number(response.headers.get('X-Seed-Filtered-Total') || items.length),
+      hasMore: response.headers.get('X-Seed-Has-More') === 'true',
+    }
   },
   createSeed: (input: Omit<Seed, 'id'>) =>
     request<Seed>('/api/seeds', { method: 'POST', body: JSON.stringify(input) }),

@@ -46,8 +46,16 @@ const editingId = ref<number | null>(null)
 const editingSeed = ref<Seed | null>(null)
 const copiedSeedId = ref<number | null>(null)
 const busy = ref(false)
+const loadingMore = ref(false)
+const seedPage = ref(0)
+const filteredTotal = ref(0)
+const hasMoreSeeds = ref(false)
+const loadMoreTrigger = ref<HTMLElement | null>(null)
 const error = ref('')
 let copyFeedbackTimer: number | undefined
+let seedLoadToken = 0
+let loadMoreObserver: IntersectionObserver | undefined
+const seedPageSize = 20
 const projectForm = reactive({ name: '', description: '' })
 const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 'middle' as SeedPriority })
 
@@ -90,17 +98,55 @@ async function loadProjects() {
 async function loadVersion() {
   try { appVersion.value = (await api.version()).version } catch { /* 版本信息不影响主功能 */ }
 }
-async function loadSeeds() {
+async function loadSeeds(reset = true) {
   if (currentPage.value !== 'seeds') return
-  if (!projectId.value) { seeds.value = []; counts.value = emptyCounts(); return }
-  busy.value = true
+  if (!projectId.value) {
+    seedLoadToken++
+    seeds.value = []; counts.value = emptyCounts(); seedPage.value = 0; filteredTotal.value = 0; hasMoreSeeds.value = false
+    busy.value = false; loadingMore.value = false
+    return
+  }
+  if (!reset && (busy.value || loadingMore.value || !hasMoreSeeds.value)) return
+  const token = reset ? ++seedLoadToken : seedLoadToken
+  const nextPage = reset ? 1 : seedPage.value + 1
+  if (reset) {
+    busy.value = true
+    loadingMore.value = false
+    seeds.value = []
+    seedPage.value = 0
+    filteredTotal.value = 0
+    hasMoreSeeds.value = false
+    counts.value = emptyCounts()
+  } else loadingMore.value = true
+  let loadedSuccessfully = false
   try {
-    const result = await api.seeds(projectId.value, filter.value, statusFilter.value, priorityFilter.value)
-    seeds.value = result.items
+    const result = await api.seeds(projectId.value, [...filter.value], [...statusFilter.value], [...priorityFilter.value], nextPage, seedPageSize)
+    if (token !== seedLoadToken) return
+    if (reset) seeds.value = result.items
+    else {
+      const loadedIds = new Set(seeds.value.map(seed => seed.id))
+      seeds.value.push(...result.items.filter(seed => !loadedIds.has(seed.id)))
+    }
     counts.value = result.counts
-  } catch (e) { showError(e) }
-  finally { busy.value = false }
+    seedPage.value = result.page
+    filteredTotal.value = result.total
+    hasMoreSeeds.value = result.hasMore
+    loadedSuccessfully = true
+  } catch (e) {
+    if (token === seedLoadToken) showError(e)
+  } finally {
+    if (token === seedLoadToken) {
+      busy.value = false
+      loadingMore.value = false
+      await nextTick()
+      if (loadedSuccessfully && loadMoreTrigger.value) {
+        loadMoreObserver?.unobserve(loadMoreTrigger.value)
+        loadMoreObserver?.observe(loadMoreTrigger.value)
+      }
+    }
+  }
 }
+function loadMoreSeeds() { loadSeeds(false) }
 async function loadWorklogs() {
   if (!worklogRange.start || !worklogRange.end) return
   const start = new Date(`${worklogRange.start}T00:00:00`)
@@ -288,10 +334,18 @@ function handleKeydown(event: KeyboardEvent) {
   else if (projectDialog.value) projectDialog.value = false
 }
 
-watch([projectId, filter, statusFilter, priorityFilter], loadSeeds, { deep: true })
+watch([projectId, filter, statusFilter, priorityFilter], () => loadSeeds(), { deep: true })
+watch(loadMoreTrigger, (current, previous) => {
+  if (previous) loadMoreObserver?.unobserve(previous)
+  if (current) loadMoreObserver?.observe(current)
+})
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('hashchange', syncPageFromHash)
+  loadMoreObserver = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) loadMoreSeeds()
+  }, { rootMargin: '240px 0px' })
+  if (loadMoreTrigger.value) loadMoreObserver.observe(loadMoreTrigger.value)
   loadVersion()
   loadProjects()
   if (currentPage.value === 'worklogs') loadWorklogs()
@@ -299,6 +353,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('hashchange', syncPageFromHash)
+  loadMoreObserver?.disconnect()
   window.clearTimeout(copyFeedbackTimer)
 })
 </script>
@@ -332,7 +387,7 @@ onBeforeUnmount(() => {
         <summary><span>优先级</span><strong>已选 {{ priorityFilter.length }}/{{ priorities.length }}</strong></summary>
         <div class="filter-menu" role="group" aria-label="按种子优先级筛选"><label v-for="item in priorities" :key="item.value" class="check-option" @click.prevent="togglePriorityFilter(item.value)"><input type="checkbox" :checked="priorityFilter.includes(item.value)" /><span>{{ item.label }}</span><em>{{ priorityCount(item.value) }}</em></label></div>
       </details>
-      <div class="filter-result" aria-live="polite">当前共过滤出 <strong>{{ seeds.length }}</strong> 颗种子</div>
+      <div class="filter-result" aria-live="polite">已显示 <strong>{{ seeds.length }}</strong> / {{ filteredTotal }} 颗种子</div>
     </div>
 
     <section class="seed-list">
@@ -348,14 +403,24 @@ onBeforeUnmount(() => {
             <select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select>
             <button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button>
-            <span v-if="seed.status === 'done' && seed.startedAt" class="list-timestamp">开始时间 {{ formatTime(seed.startedAt) }}</span>
-            <span v-if="seed.status === 'done' && seed.completedAt" class="list-timestamp">完成时间 {{ formatTime(seed.completedAt) }}</span>
-            <span v-if="seed.status === 'done' && seed.durationSeconds != null" class="list-timestamp">耗时 {{ formatDuration(seed.durationSeconds) }}</span>
+            <span
+              v-if="seed.status === 'done' && (seed.startedAt || seed.completedAt || seed.durationSeconds != null)"
+              class="list-timestamps"
+            >
+              <span v-if="seed.startedAt" class="list-timestamp">开始时间 {{ formatTime(seed.startedAt) }}</span>
+              <span v-if="seed.completedAt" class="list-timestamp">完成时间 {{ formatTime(seed.completedAt) }}</span>
+              <span v-if="seed.durationSeconds != null" class="list-timestamp">耗时 {{ formatDuration(seed.durationSeconds) }}</span>
+            </span>
           </div>
           <div class="seed-main"><h2>{{ seed.title }}</h2><p v-if="seed.content">{{ seed.content }}</p></div>
         </div>
         <button class="icon-button" title="删除" @click.stop="removeSeed(seed.id)">×</button>
       </article>
+      <div v-if="seeds.length" ref="loadMoreTrigger" class="load-more-status" aria-live="polite">
+        <span v-if="loadingMore">正在加载更多种子……</span>
+        <span v-else-if="hasMoreSeeds">继续向下滚动加载更多</span>
+        <span v-else>已显示全部 {{ filteredTotal }} 颗种子</span>
+      </div>
     </section>
     <footer v-if="appVersion" class="app-version" title="当前版本">版本 {{ appVersion }}</footer>
   </main>

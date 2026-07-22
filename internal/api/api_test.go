@@ -158,6 +158,92 @@ func TestSeedsAreOrderedByCreationTimeDescending(t *testing.T) {
 	}
 }
 
+func TestSeedsArePaginatedTwentyAtATimeByDefault(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('分页项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	for index := 1; index <= 25; index++ {
+		if _, err := db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority) VALUES(?, 'todo', 'inbox', ?, 'middle')`, projectID, "种子"+strconv.Itoa(index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	requestPage := func(path string) (*httptest.ResponseRecorder, []seed) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, body = %s", path, recorder.Code, recorder.Body.String())
+		}
+		var items []seed
+		if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+			t.Fatal(err)
+		}
+		return recorder, items
+	}
+
+	basePath := "/api/seeds?projectId=" + itoa(projectID)
+	firstResponse, firstPage := requestPage(basePath)
+	if len(firstPage) != 20 || firstPage[0].Title != "种子25" || firstPage[19].Title != "种子6" {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+	if got := firstResponse.Header().Get("X-Seed-Filtered-Total"); got != "25" {
+		t.Fatalf("X-Seed-Filtered-Total = %q, want 25", got)
+	}
+	if got := firstResponse.Header().Get("X-Seed-Page-Size"); got != "20" {
+		t.Fatalf("X-Seed-Page-Size = %q, want 20", got)
+	}
+	if got := firstResponse.Header().Get("X-Seed-Has-More"); got != "true" {
+		t.Fatalf("X-Seed-Has-More = %q, want true", got)
+	}
+
+	secondResponse, secondPage := requestPage(basePath + "&page=2")
+	if len(secondPage) != 5 || secondPage[0].Title != "种子5" || secondPage[4].Title != "种子1" {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+	if got := secondResponse.Header().Get("X-Seed-Page"); got != "2" {
+		t.Fatalf("X-Seed-Page = %q, want 2", got)
+	}
+	if got := secondResponse.Header().Get("X-Seed-Has-More"); got != "false" {
+		t.Fatalf("X-Seed-Has-More = %q, want false", got)
+	}
+}
+
+func TestSeedsRejectInvalidPagination(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	result, err := db.Exec(`INSERT INTO projects(name) VALUES('分页参数项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := result.LastInsertId()
+	mux := http.NewServeMux()
+	Register(mux, db)
+
+	for _, query := range []string{"page=0", "page=nope", "pageSize=0", "pageSize=101"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/api/seeds?projectId="+itoa(projectID)+"&"+query, nil)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s status = %d, want 400; body = %s", query, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 func TestSeedsSupportMultipleAndEmptyFilters(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {
