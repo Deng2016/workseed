@@ -9,6 +9,19 @@ interface WorklogDay { key: string; label: string; items: Seed[] }
 interface WorklogMonth { key: string; label: string; days: WorklogDay[]; count: number }
 interface WorklogYear { key: string; label: string; months: WorklogMonth[]; count: number }
 
+const projectStorageKey = 'workseed.seed-list.project-id'
+
+function parseStoredProjectId(value: string | null) {
+  if (value === null) return 0
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
+}
+
+function readStoredProjectId() {
+  try { return parseStoredProjectId(window.localStorage.getItem(projectStorageKey)) }
+  catch { return 0 }
+}
+
 const types: { value: SeedType | 'all'; label: string; icon: string }[] = [
   { value: 'all', label: '全部类型', icon: '◇' },
   { value: 'idea', label: '灵感', icon: '✦' },
@@ -35,7 +48,7 @@ const worklogRange = reactive({ start: initialWorklogRange.start, end: initialWo
 const activeQuickRange = ref<QuickRange | null>('month')
 const emptyCounts = (): SeedCounts => ({ total: 0, idea: 0, feature: 0, todo: 0, bug: 0, inbox: 0, doing: 0, done: 0, high: 0, middle: 0, low: 0 })
 const counts = ref<SeedCounts>(emptyCounts())
-const projectId = ref<number>(0)
+const projectId = ref<number>(readStoredProjectId())
 const filter = ref<SeedType[]>(['idea', 'feature', 'todo', 'bug'])
 const statusFilter = ref<SeedStatus[]>(['inbox', 'doing'])
 const priorityFilter = ref<SeedPriority[]>(['high', 'middle', 'low'])
@@ -92,8 +105,9 @@ const worklogGroups = computed<WorklogYear[]>(() => {
 async function loadProjects() {
   try {
     projects.value = await api.projects()
-    if (!projectId.value && projects.value.length) projectId.value = projects.value[0].id
+    if (projectId.value && !projects.value.some(project => project.id === projectId.value)) projectId.value = 0
     if (!projects.value.length && currentPage.value === 'seeds') projectDialog.value = true
+    if (currentPage.value === 'seeds') await loadSeeds()
   } catch (e) { showError(e) }
 }
 async function loadVersion() {
@@ -101,12 +115,6 @@ async function loadVersion() {
 }
 async function loadSeeds(reset = true) {
   if (currentPage.value !== 'seeds') return
-  if (!projectId.value) {
-    seedLoadToken++
-    seeds.value = []; counts.value = emptyCounts(); seedPage.value = 0; filteredTotal.value = 0; hasMoreSeeds.value = false
-    busy.value = false; loadingMore.value = false
-    return
-  }
   if (!reset && (busy.value || loadingMore.value || !hasMoreSeeds.value)) return
   const token = reset ? ++seedLoadToken : seedLoadToken
   const nextPage = reset ? 1 : seedPage.value + 1
@@ -189,8 +197,9 @@ function resizeContentFromEvent(event: Event) {
   resizeContent(event.target as HTMLTextAreaElement)
 }
 async function saveSeed() {
-  if (!seedForm.title.trim() || !projectId.value) return
-  const value = { id: editingId.value ?? 0, projectId: projectId.value, ...seedForm }
+  const targetProjectId = editingSeed.value?.projectId ?? projectId.value
+  if (!seedForm.title.trim() || !targetProjectId) return
+  const value = { id: editingId.value ?? 0, projectId: targetProjectId, ...seedForm }
   try {
     if (editingId.value) await api.updateSeed(value)
     else await api.createSeed(value)
@@ -326,8 +335,19 @@ function syncPageFromHash() {
   projectDialog.value = false
   seedDialog.value = false
   if (currentPage.value === 'worklogs') loadWorklogs()
-  else if (projectId.value) loadSeeds()
-  else if (!projects.value.length) projectDialog.value = true
+  else {
+    loadSeeds()
+    if (!projects.value.length) projectDialog.value = true
+  }
+}
+
+function persistProjectId(value: number) {
+  try { window.localStorage.setItem(projectStorageKey, String(value)) }
+  catch { /* 存储不可用时仍保持当前会话可用 */ }
+}
+
+function syncProjectFromStorage(event: StorageEvent) {
+  if (event.key === projectStorageKey) projectId.value = parseStoredProjectId(event.newValue)
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -337,6 +357,7 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 watch([projectId, filter, statusFilter, priorityFilter, keyword], () => loadSeeds(), { deep: true })
+watch(projectId, persistProjectId)
 watch(loadMoreTrigger, (current, previous) => {
   if (previous) loadMoreObserver?.unobserve(previous)
   if (current) loadMoreObserver?.observe(current)
@@ -344,6 +365,7 @@ watch(loadMoreTrigger, (current, previous) => {
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
   window.addEventListener('hashchange', syncPageFromHash)
+  window.addEventListener('storage', syncProjectFromStorage)
   loadMoreObserver = new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting)) loadMoreSeeds()
   }, { rootMargin: '240px 0px' })
@@ -355,6 +377,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('hashchange', syncPageFromHash)
+  window.removeEventListener('storage', syncProjectFromStorage)
   loadMoreObserver?.disconnect()
   window.clearTimeout(copyFeedbackTimer)
 })
@@ -365,11 +388,11 @@ onBeforeUnmount(() => {
     <header class="topbar">
       <div class="brand"><a class="brand-link" href="#/worklogs" title="查看工作日志"><img class="brand-mark" src="/favicon.png" alt="" /><span><strong>拾种</strong><small>WORKSEED</small></span></a><span class="brand-tagline">把工作中的每个念头，都安放在这里。</span></div>
       <div class="project-picker">
-        <span class="label">当前项目</span>
-        <select v-model="projectId"><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select>
+        <span class="label">项目</span>
+        <select v-model="projectId"><option :value="0">全部项目</option><option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option></select>
         <button class="quiet" @click="projectDialog = true">＋ 新建项目</button>
       </div>
-      <button class="primary" :disabled="!projectId" @click="openSeed()">＋ 播下一颗种子</button>
+      <button class="primary" :disabled="!projectId" :title="projectId ? '' : '请先选择一个具体项目'" @click="openSeed()">＋ 播下一颗种子</button>
     </header>
 
     <section v-if="currentProject?.description" class="hero">
@@ -397,13 +420,14 @@ onBeforeUnmount(() => {
 
     <section class="seed-list">
       <p v-if="busy" class="empty">正在翻土……</p>
-      <div v-else-if="!projectId" class="empty"><b>先创建一个项目</b><span>项目是一片苗圃，用来收纳相关的工作种子。</span></div>
+      <div v-else-if="!projects.length" class="empty"><b>先创建一个项目</b><span>项目是一片苗圃，用来收纳相关的工作种子。</span></div>
       <div v-else-if="!seeds.length && counts.total > 0" class="empty"><b>没有符合条件的种子</b><span>尝试修改关键字，或切换类型、状态、优先级筛选。</span><button class="quiet" @click="resetFilters">恢复默认筛选</button></div>
-      <div v-else-if="!seeds.length" class="empty"><b>这里还没有种子</b><span>记录一闪而过的灵感，或下一件要完成的事。</span><button class="primary" v-on:click="openSeed()">播下第一颗</button></div>
+      <div v-else-if="!seeds.length" class="empty"><b>{{ projectId ? '这里还没有种子' : '所有项目都还没有种子' }}</b><span>{{ projectId ? '记录一闪而过的灵感，或下一件要完成的事。' : '选择一个具体项目后，就可以播下第一颗种子。' }}</span><button v-if="projectId" class="primary" v-on:click="openSeed()">播下第一颗</button></div>
       <article v-for="seed in seeds" :key="seed.id" class="seed-card" @click="openSeed(seed)">
         <div class="type-dot" :class="seed.type">{{ typeInfo(seed.type).icon }}</div>
         <div class="seed-body">
           <div class="seed-meta">
+            <span v-if="!projectId" class="seed-project">{{ projectName(seed.projectId) }}</span><i v-if="!projectId">·</i>
             <select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select>

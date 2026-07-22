@@ -104,12 +104,16 @@ func (s *server) projects(w http.ResponseWriter, r *http.Request) {
 func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		projectID, _ := strconv.ParseInt(r.URL.Query().Get("projectId"), 10, 64)
-		if projectID == 0 {
-			problem(w, 400, "projectId 必填")
-			return
-		}
 		queryValues := r.URL.Query()
+		var projectID int64
+		if projectValue := strings.TrimSpace(queryValues.Get("projectId")); projectValue != "" {
+			var err error
+			projectID, err = strconv.ParseInt(projectValue, 10, 64)
+			if err != nil || projectID < 1 {
+				problem(w, 400, "无效的 projectId")
+				return
+			}
+		}
 		page, err := parsePositiveQueryInt(queryValues.Get("page"), 1)
 		if err != nil {
 			problem(w, 400, "无效的页码")
@@ -139,8 +143,12 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			problem(w, 400, "无效的优先级")
 			return
 		}
-		where := ` WHERE project_id = ?`
-		args := []any{projectID}
+		where := ` WHERE 1=1`
+		args := []any{}
+		if projectID > 0 {
+			where += ` AND project_id = ?`
+			args = append(args, projectID)
+		}
 		where, args = appendMultiFilter(where, args, "type", kinds, kindsSupplied)
 		where, args = appendMultiFilter(where, args, "status", statuses, statusesSupplied)
 		where, args = appendMultiFilter(where, args, "priority", priorities, prioritiesSupplied)
@@ -329,12 +337,18 @@ func (s *server) worklogs(w http.ResponseWriter, r *http.Request) {
 
 func writeSeedCountHeaders(w http.ResponseWriter, db *sql.DB, projectID int64) error {
 	var total, idea, feature, todo, bug, inbox, doing, done, high, middle, low int
-	err := db.QueryRow(`SELECT COUNT(*),
+	query := `SELECT COUNT(*),
 		COALESCE(SUM(type = 'idea'), 0), COALESCE(SUM(type = 'feature'), 0),
 		COALESCE(SUM(type = 'todo'), 0), COALESCE(SUM(type = 'bug'), 0),
 		COALESCE(SUM(status = 'inbox'), 0), COALESCE(SUM(status = 'doing'), 0), COALESCE(SUM(status = 'done'), 0),
 		COALESCE(SUM(priority = 'high'), 0), COALESCE(SUM(priority = 'middle'), 0),
-		COALESCE(SUM(priority = 'low'), 0) FROM seeds WHERE project_id = ?`, projectID).
+		COALESCE(SUM(priority = 'low'), 0) FROM seeds`
+	args := []any{}
+	if projectID > 0 {
+		query += ` WHERE project_id = ?`
+		args = append(args, projectID)
+	}
+	err := db.QueryRow(query, args...).
 		Scan(&total, &idea, &feature, &todo, &bug, &inbox, &doing, &done, &high, &middle, &low)
 	if err != nil {
 		return err

@@ -552,6 +552,12 @@ textarea:focus {
     margin: 0 4px;
 }
 
+.seed-project {
+    color: #536c5a;
+    font-weight: 700;
+    text-transform: none;
+}
+
 .seed-meta select {
     width: auto;
     border: 0;

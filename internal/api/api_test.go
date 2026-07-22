@@ -295,6 +295,57 @@ func TestSeedsSupportMultipleAndEmptyFilters(t *testing.T) {
 	}
 }
 
+func TestSeedsCanBeListedAcrossProjectsWithoutProjectID(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	firstResult, err := db.Exec(`INSERT INTO projects(name) VALUES('跨项目一')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResult, err := db.Exec(`INSERT INTO projects(name) VALUES('跨项目二')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProjectID, _ := firstResult.LastInsertId()
+	secondProjectID, _ := secondResult.LastInsertId()
+	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, created_at) VALUES
+		(?, 'idea', 'inbox', '项目一的灵感', 'high', '2026-01-01 00:00:00'),
+		(?, 'todo', 'doing', '项目二的事项', 'middle', '2026-02-01 00:00:00'),
+		(?, 'bug', 'done', '项目二的缺陷', 'low', '2026-03-01 00:00:00')`, firstProjectID, secondProjectID, secondProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/seeds?status=inbox,doing", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var items []seed
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].ProjectID != secondProjectID || items[1].ProjectID != firstProjectID {
+		t.Fatalf("cross-project items = %#v", items)
+	}
+	if got := recorder.Header().Get("X-Seed-Filtered-Total"); got != "2" {
+		t.Fatalf("X-Seed-Filtered-Total = %q, want 2", got)
+	}
+	if got := recorder.Header().Get("X-Seed-Count-Total"); got != "3" {
+		t.Fatalf("X-Seed-Count-Total = %q, want 3", got)
+	}
+	if got := recorder.Header().Get("X-Seed-Count-Bug"); got != "1" {
+		t.Fatalf("X-Seed-Count-Bug = %q, want 1", got)
+	}
+}
+
 func TestSeedsSearchKeywordInTitleAndContent(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {

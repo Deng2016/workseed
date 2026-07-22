@@ -19,7 +19,8 @@ export const api = {
   createProject: (input: Pick<Project, 'name' | 'description'>) =>
     request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) }),
   seeds: async (projectId: number, types: SeedType[], statuses: SeedStatus[], priorities: SeedPriority[], keyword = '', page = 1, pageSize = 20): Promise<SeedListResult> => {
-    const query = new URLSearchParams({ projectId: String(projectId), page: String(page), pageSize: String(pageSize) })
+    const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) })
+    if (projectId > 0) query.set('projectId', String(projectId))
     const addFilter = (name: string, values: string[]) => {
       if (!values.length) query.set(name, '')
       else values.forEach(value => query.append(name, value))
