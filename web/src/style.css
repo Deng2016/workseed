@@ -776,6 +776,12 @@ textarea:focus {
     resize: none;
 }
 
+.seed-form input[readonly] {
+    color: #657068;
+    background: #efefe9;
+    cursor: default;
+}
+
 .seed-form label:has(textarea) {
     font-weight: 400;
 }
