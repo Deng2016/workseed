@@ -33,10 +33,10 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	firstProjectID, _ := firstProject.LastInsertId()
 	secondProjectID, _ := secondProject.LastInsertId()
 	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority, created_at) VALUES
-		(?, 'todo', 'inbox', '低优先级', '低优先级内容', 'low', '2026-01-01 00:00:00'),
-		(?, 'bug', 'inbox', '高优先级', '高优先级内容', 'high', '2026-03-01 00:00:00'),
-		(?, 'feature', 'inbox', '中优先级', '中优先级内容', 'middle', '2026-02-01 00:00:00'),
-		(?, 'idea', 'done', '已经完成', '', 'high', '2026-04-01 00:00:00')`,
+		(?, 'todo', 'inbox', '低优先级', '低优先级内容', 'low', '2026-01-01T00:00:00Z'),
+		(?, 'bug', 'inbox', '高优先级', '高优先级内容', 'high', '2026-03-01T00:00:00Z'),
+		(?, 'feature', 'inbox', '中优先级', '中优先级内容', 'middle', '2026-02-01T00:00:00Z'),
+		(?, 'idea', 'done', '已经完成', '', 'high', '2026-04-01T00:00:00Z')`,
 		firstProjectID, secondProjectID, firstProjectID, secondProjectID)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 		t.Fatalf("another agent unexpectedly owns seed: %#v", fetchedByOther)
 	}
 
-	if _, err := db.Exec(`UPDATE seeds SET started_at = datetime(CURRENT_TIMESTAMP, '-120 seconds') WHERE id = ?`, highPriorityID); err != nil {
+	if _, err := db.Exec(`UPDATE seeds SET started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-120 seconds') WHERE id = ?`, highPriorityID); err != nil {
 		t.Fatal(err)
 	}
 	assertToolError(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": "other-agent-claim"})
@@ -148,6 +148,14 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != wantDuration {
 		t.Fatalf("duration = %v, want %d", completed.Seed.DurationSeconds, wantDuration)
+	}
+	var storedStartedAt, storedCompletedAt, storedUpdatedAt string
+	if err := db.QueryRow(`SELECT started_at, completed_at, updated_at FROM seeds WHERE id=?`, highPriorityID).
+		Scan(&storedStartedAt, &storedCompletedAt, &storedUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{storedStartedAt, storedCompletedAt, storedUpdatedAt} {
+		assertRFC3339UTC(t, value)
 	}
 	duplicateComplete := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var completedAgain transitionOutput
@@ -217,7 +225,7 @@ func TestArchivedProjectsAreExcludedFromMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	activeID, _ := activeResult.LastInsertId()
-	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', CURRENT_TIMESTAMP)`)
+	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`)
 	if err != nil {
 		t.Fatal(err)
 	}

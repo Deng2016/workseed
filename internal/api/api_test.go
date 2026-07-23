@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"workseed/internal/store"
-	"workseed/internal/utctime"
 	"workseed/internal/worktime"
 )
 
@@ -78,7 +77,7 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := db.Exec(`UPDATE seeds SET started_at=datetime(CURRENT_TIMESTAMP, '-3661 seconds') WHERE id=?`, stepByStep.ID); err != nil {
+	if _, err := db.Exec(`UPDATE seeds SET started_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-3661 seconds') WHERE id=?`, stepByStep.ID); err != nil {
 		t.Fatal(err)
 	}
 	stepByStep = patchStatus(stepByStep, "done")
@@ -99,7 +98,8 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, value := range []string{storedCreatedAt, storedUpdatedAt, storedCompletedAt} {
-		stored, err := time.ParseInLocation(utctime.DatabaseLayout, value, time.UTC)
+		assertRFC3339UTC(t, value)
+		stored, err := time.Parse(time.RFC3339, value)
 		if err != nil {
 			t.Fatalf("database timestamp %q: %v", value, err)
 		}
@@ -243,8 +243,8 @@ func TestSeedsAreOrderedByCreationTimeDescending(t *testing.T) {
 	}
 	projectID, _ := result.LastInsertId()
 	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, created_at, updated_at) VALUES
-		(?, 'todo', 'inbox', '较早创建', 'high', '2026-01-01 00:00:00', CURRENT_TIMESTAMP),
-		(?, 'todo', 'done', '较晚创建', 'low', '2026-02-01 00:00:00', '2026-02-01 00:00:00')`, projectID, projectID)
+		(?, 'todo', 'inbox', '较早创建', 'high', '2026-01-01T00:00:00Z', strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+		(?, 'todo', 'done', '较晚创建', 'low', '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z')`, projectID, projectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,9 +421,9 @@ func TestSeedsCanBeListedAcrossProjectsWithoutProjectID(t *testing.T) {
 	firstProjectID, _ := firstResult.LastInsertId()
 	secondProjectID, _ := secondResult.LastInsertId()
 	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, created_at) VALUES
-		(?, 'idea', 'inbox', '项目一的灵感', 'high', '2026-01-01 00:00:00'),
-		(?, 'todo', 'doing', '项目二的事项', 'middle', '2026-02-01 00:00:00'),
-		(?, 'bug', 'done', '项目二的缺陷', 'low', '2026-03-01 00:00:00')`, firstProjectID, secondProjectID, secondProjectID)
+		(?, 'idea', 'inbox', '项目一的灵感', 'high', '2026-01-01T00:00:00Z'),
+		(?, 'todo', 'doing', '项目二的事项', 'middle', '2026-02-01T00:00:00Z'),
+		(?, 'bug', 'done', '项目二的缺陷', 'low', '2026-03-01T00:00:00Z')`, firstProjectID, secondProjectID, secondProjectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,10 +519,10 @@ func TestWorklogsFilterByCompletionTime(t *testing.T) {
 	}
 	projectID, _ := result.LastInsertId()
 	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, completed_at) VALUES
-		(?, 'todo', 'done', '范围之前', 'middle', '2026-06-30 23:59:59'),
-		(?, 'feature', 'done', '七月较早', 'high', '2026-07-01 00:00:00'),
-		(?, 'bug', 'done', '七月较晚', 'high', '2026-07-31 23:59:59'),
-		(?, 'todo', 'done', '范围之后', 'low', '2026-08-01 00:00:00')`, projectID, projectID, projectID, projectID)
+		(?, 'todo', 'done', '范围之前', 'middle', '2026-06-30T23:59:59Z'),
+		(?, 'feature', 'done', '七月较早', 'high', '2026-07-01T00:00:00Z'),
+		(?, 'bug', 'done', '七月较晚', 'high', '2026-07-31T23:59:59Z'),
+		(?, 'todo', 'done', '范围之后', 'low', '2026-08-01T00:00:00Z')`, projectID, projectID, projectID, projectID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestSettingsAndProjectManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	activeID, _ := activeResult.LastInsertId()
-	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', CURRENT_TIMESTAMP)`)
+	archivedResult, err := db.Exec(`INSERT INTO projects(name, archived_at) VALUES('归档项目', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,8 +574,8 @@ func TestSettingsAndProjectManagement(t *testing.T) {
 	}
 	emptyID, _ := emptyResult.LastInsertId()
 	_, err = db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority, completed_at) VALUES
-		(?, 'todo', 'done', '活跃事种', 'middle', '2026-07-22 08:00:00'),
-		(?, 'todo', 'done', '归档事种', 'middle', '2026-07-22 08:00:00')`, activeID, archivedID)
+		(?, 'todo', 'done', '活跃事种', 'middle', '2026-07-22T08:00:00Z'),
+		(?, 'todo', 'done', '归档事种', 'middle', '2026-07-22T08:00:00Z')`, activeID, archivedID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,6 +676,23 @@ func TestSettingsAndProjectManagement(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("update settings status = %d: %s", response.Code, response.Body.String())
 	}
+	var settingsUpdatedAt string
+	if err := db.QueryRow(`SELECT updated_at FROM app_settings WHERE id=1`).Scan(&settingsUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	assertRFC3339UTC(t, settingsUpdatedAt)
+
+	response = request(http.MethodPatch, "/api/projects/"+itoa(activeID), map[string]bool{"archived": true})
+	if response.Code != http.StatusOK {
+		t.Fatalf("archive status = %d: %s", response.Code, response.Body.String())
+	}
+	var projectArchivedAt, projectUpdatedAt string
+	if err := db.QueryRow(`SELECT archived_at, updated_at FROM projects WHERE id=?`, activeID).
+		Scan(&projectArchivedAt, &projectUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	assertRFC3339UTC(t, projectArchivedAt)
+	assertRFC3339UTC(t, projectUpdatedAt)
 }
 
 func TestAppVersion(t *testing.T) {

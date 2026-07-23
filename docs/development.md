@@ -162,7 +162,7 @@ cp -a ./data ./data-backup
 
 种子字段的可选值参见 README 中的[字段约定](../README.md#字段约定)。列表接口的 `type`、`status`、`priority` 参数可重复传递以实现多选，也兼容逗号分隔值；参数值为空表示该组不选择任何值。`keyword` 会使用 `LIKE` 同时模糊匹配标题和详细内容，并与其他筛选条件组合。接口还会通过 `X-Seed-Count-*` 响应头返回各类型、状态和优先级的总数，供前端在单次请求中展示筛选统计。
 
-种子列表按 `createdAt` 倒序返回。数据库中的时间字段统一存储为 UTC；HTTP API 与 MCP 中的时间字段统一返回带 `Z` 的 RFC 3339 UTC 时间，前端使用浏览器本地时区展示。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和工作耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时按设置的上下班时间计算耗时。默认工作时间为 10:00–19:00。状态可在 `inbox`、`doing`、`paused`、`skipped`、`done` 之间自由切换。归档项目及其事种不会出现在项目列表、种子查询、工作日志或 MCP 查询中。
+种子列表按 `createdAt` 倒序返回。数据库中的时间字段统一存储为 `YYYY-MM-DDTHH:MM:SSZ` 格式的 RFC 3339 UTC 字符串；启动时会自动把旧版不带时区的 UTC 时间迁移为该格式。HTTP API 与 MCP 中的时间字段同样返回带 `Z` 的 RFC 3339 UTC 时间，前端使用浏览器本地时区展示。种子响应中的 `startedAt`、`completedAt` 和 `durationSeconds` 分别表示开始时间、完成时间和工作耗时（秒）。进入 `doing` 时记录开始时间；进入 `done` 时记录完成时间，且仅在已有开始时间时按设置的上下班时间计算耗时。默认工作时间为 10:00–19:00。状态可在 `inbox`、`doing`、`paused`、`skipped`、`done` 之间自由切换。归档项目及其事种不会出现在项目列表、种子查询、工作日志或 MCP 查询中。
 
 工作日志接口按 `completedAt` 倒序返回所有项目中已记录完成时间的种子。`startTime` 和 `endTime` 使用 RFC 3339 格式；开始时间包含在结果中，结束时间作为不包含的上界。两个参数均可省略。
 

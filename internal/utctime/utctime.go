@@ -5,20 +5,20 @@ import (
 	"time"
 )
 
-const DatabaseLayout = "2006-01-02 15:04:05"
+const legacyDatabaseLayout = "2006-01-02 15:04:05"
 
-var databaseLayouts = []string{
-	DatabaseLayout,
+var legacyDatabaseLayouts = []string{
+	legacyDatabaseLayout,
 	"2006-01-02T15:04:05",
 }
 
-// Parse interprets database timestamps without an explicit offset as UTC and
-// accepts RFC 3339 timestamps from API boundaries.
+// Parse accepts RFC 3339 timestamps and interprets legacy database timestamps
+// without an explicit offset as UTC.
 func Parse(value string) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return parsed.UTC(), nil
 	}
-	for _, layout := range databaseLayouts {
+	for _, layout := range legacyDatabaseLayouts {
 		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
 			return parsed, nil
 		}
@@ -26,7 +26,7 @@ func Parse(value string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid UTC timestamp %q", value)
 }
 
-// FormatRFC3339 makes the UTC offset explicit at API boundaries.
+// FormatRFC3339 normalizes a timestamp to an explicit UTC offset.
 func FormatRFC3339(value string) (string, error) {
 	parsed, err := Parse(value)
 	if err != nil {

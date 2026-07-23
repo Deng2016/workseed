@@ -272,7 +272,8 @@ func startSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOutpu
 		return seedOutput{}, fmt.Errorf("事种 %d 当前状态为 %s，不能使用此 claimToken 领取", input.SeedID, currentStatus)
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'doing', claim_token = ?,
-		started_at = CURRENT_TIMESTAMP, completed_at = NULL, duration_seconds = NULL, updated_at = CURRENT_TIMESTAMP
+		started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), completed_at = NULL, duration_seconds = NULL,
+		updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 		WHERE id = ? AND status = 'inbox'`, claimToken, input.SeedID)
 	if err != nil {
 		return seedOutput{}, err
@@ -307,9 +308,9 @@ func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOu
 	if !claimTokenMatches(storedClaimToken, claimToken) {
 		return seedOutput{}, fmt.Errorf("事种 %d 不属于当前 claimToken", input.SeedID)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'done', completed_at = CURRENT_TIMESTAMP,
+	result, err := tx.ExecContext(ctx, `UPDATE seeds SET status = 'done', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
 		duration_seconds = NULL,
-		updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'doing' AND claim_token = ?`, input.SeedID, claimToken)
+		updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ? AND status = 'doing' AND claim_token = ?`, input.SeedID, claimToken)
 	if err != nil {
 		return seedOutput{}, err
 	}
@@ -378,7 +379,8 @@ func skipSeed(ctx context.Context, db *sql.DB, input skipSeedInput) (seedOutput,
 	}
 
 	query := `UPDATE seeds SET status = 'skipped', completed_at = NULL, duration_seconds = NULL,
-		claim_token = CASE WHEN ? = 'doing' THEN claim_token ELSE NULL END, updated_at = CURRENT_TIMESTAMP
+		claim_token = CASE WHEN ? = 'doing' THEN claim_token ELSE NULL END,
+		updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 		WHERE id = ? AND status = ?`
 	args := []any{expectedStatus, input.SeedID, expectedStatus}
 	if expectedStatus == "doing" {

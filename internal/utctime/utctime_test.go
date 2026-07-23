@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestParseTreatsDatabaseFormatsAsUTC(t *testing.T) {
+func TestParseTreatsLegacyDatabaseFormatsAsUTC(t *testing.T) {
 	for _, value := range []string{"2026-07-22 10:30:00", "2026-07-22T10:30:00", "2026-07-22T18:30:00+08:00"} {
 		parsed, err := Parse(value)
 		if err != nil {

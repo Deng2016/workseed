@@ -143,8 +143,8 @@ func (s *server) projectByID(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		result, err := s.db.Exec(`UPDATE projects SET archived_at=CASE WHEN ? THEN COALESCE(archived_at, CURRENT_TIMESTAMP) ELSE NULL END,
-			updated_at=CURRENT_TIMESTAMP WHERE id=?`, in.Archived, id)
+		result, err := s.db.Exec(`UPDATE projects SET archived_at=CASE WHEN ? THEN COALESCE(archived_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) ELSE NULL END,
+			updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id=?`, in.Archived, id)
 		if err != nil {
 			problem(w, http.StatusInternalServerError, err.Error())
 			return
@@ -223,7 +223,7 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 			problem(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if _, err := s.db.ExecContext(r.Context(), `UPDATE app_settings SET workday_start=?, workday_end=?, updated_at=CURRENT_TIMESTAMP WHERE id=1`, in.WorkdayStart, in.WorkdayEnd); err != nil {
+		if _, err := s.db.ExecContext(r.Context(), `UPDATE app_settings SET workday_start=?, workday_end=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id=1`, in.WorkdayStart, in.WorkdayEnd); err != nil {
 			problem(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -351,7 +351,7 @@ func (s *server) seeds(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, err := s.db.Exec(`INSERT INTO seeds(project_id, type, status, title, content, priority, started_at, completed_at)
-			VALUES(?, ?, ?, ?, ?, ?, CASE WHEN ?='doing' THEN CURRENT_TIMESTAMP ELSE NULL END, CASE WHEN ?='done' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+			VALUES(?, ?, ?, ?, ?, ?, CASE WHEN ?='doing' THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') ELSE NULL END, CASE WHEN ?='done' THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') ELSE NULL END)`,
 			in.ProjectID, in.Type, in.Status, strings.TrimSpace(in.Title), strings.TrimSpace(in.Content), in.Priority, in.Status, in.Status)
 		if err != nil {
 			problem(w, 500, err.Error())
@@ -403,8 +403,8 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err = tx.ExecContext(r.Context(), `UPDATE seeds SET
 			type=?,
-			started_at=CASE WHEN ?='doing' AND status<>'doing' THEN CURRENT_TIMESTAMP ELSE started_at END,
-			completed_at=CASE WHEN ?='done' AND status<>'done' THEN CURRENT_TIMESTAMP WHEN ?<>'done' THEN NULL ELSE completed_at END,
+			started_at=CASE WHEN ?='doing' AND status<>'doing' THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') ELSE started_at END,
+			completed_at=CASE WHEN ?='done' AND status<>'done' THEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHEN ?<>'done' THEN NULL ELSE completed_at END,
 			duration_seconds=CASE
 				WHEN ?='done' AND status<>'done' THEN NULL
 				WHEN ?<>'done' THEN NULL
@@ -415,7 +415,7 @@ func (s *server) seedByID(w http.ResponseWriter, r *http.Request) {
 				WHEN status='doing' AND ? IN ('done', 'skipped') THEN claim_token
 				ELSE NULL
 			END,
-			status=?, title=?, content=?, priority=?, updated_at=CURRENT_TIMESTAMP
+			status=?, title=?, content=?, priority=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 			WHERE id=?`,
 			in.Type,
 			in.Status,
