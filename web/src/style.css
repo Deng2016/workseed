@@ -575,6 +575,13 @@ textarea:focus {
     text-transform: none;
 }
 
+.token-total {
+    color: #52705b;
+    font-weight: 700;
+    text-transform: none;
+    white-space: nowrap;
+}
+
 .seed-meta select {
     width: auto;
     border: 0;
@@ -803,6 +810,95 @@ textarea:focus {
 .seed-timestamps strong {
     color: #59645b;
     font-weight: 600;
+}
+
+.seed-workpad {
+    display: grid;
+    gap: 14px;
+    margin-top: 18px;
+    padding: 18px;
+    border: 1px solid #d8ddd3;
+    border-radius: 13px;
+    background: #f4f5ef;
+}
+
+.workpad-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.workpad-heading .eyebrow {
+    margin: 0 0 3px;
+}
+
+.workpad-heading h3 {
+    margin: 0;
+    color: #344238;
+    font: 20px Georgia, "Songti SC", serif;
+}
+
+.workpad-heading > span {
+    color: #7d887f;
+    font-size: 11px;
+}
+
+.workpad-tokens {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.workpad-tokens span {
+    display: grid;
+    gap: 4px;
+    padding: 9px 11px;
+    border-radius: 9px;
+    background: #e8ece3;
+}
+
+.workpad-tokens small,
+.workpad-commit small {
+    color: #79847b;
+    font-size: 10px;
+    letter-spacing: .08em;
+}
+
+.workpad-tokens strong {
+    color: #385244;
+    font-size: 15px;
+}
+
+.workpad-commit {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.workpad-commit code {
+    overflow: hidden;
+    color: #485a4d;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: all;
+}
+
+.workpad-section h4 {
+    margin: 0 0 5px;
+    color: #59665c;
+    font-size: 11px;
+    letter-spacing: .05em;
+}
+
+.workpad-section p {
+    margin: 0;
+    color: #49534b;
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
 }
 
 .dialog h2 {
@@ -1391,6 +1487,10 @@ textarea:focus {
 
     .seed-form .grid {
         grid-template-columns: 1fr;
+    }
+
+    .workpad-heading {
+        display: grid;
     }
 
     .summary {

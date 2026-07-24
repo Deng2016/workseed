@@ -123,6 +123,61 @@ func TestSeedStatusTimestampsAndDuration(t *testing.T) {
 	}
 }
 
+func TestSeedResponsesIncludeWorkpadWhenPresent(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	projectResult, err := db.Exec(`INSERT INTO projects(name) VALUES('Workpad 项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := projectResult.LastInsertId()
+	seedResult, err := db.Exec(`INSERT INTO seeds(project_id, type, status, title, priority)
+		VALUES(?, 'feature', 'done', '带处理详情', 'middle')`, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedID, _ := seedResult.LastInsertId()
+	if _, err := db.Exec(`INSERT INTO seed_workpads(
+			seed_id, input_tokens, output_tokens, total_tokens, commit_at, commit_id, implementation, changes)
+		VALUES(?, 900, 300, 1250, '2026-07-24T08:30:00Z', 'feed1234', '使用独立表', '增加列表和详情展示')`, seedID); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	Register(mux, db)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/seeds?projectId="+itoa(projectID)+"&status=all", nil)
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var items []seed
+	if err := json.NewDecoder(recorder.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Workpad == nil {
+		t.Fatalf("items = %#v", items)
+	}
+	workpad := items[0].Workpad
+	if workpad.InputTokens != 900 || workpad.OutputTokens != 300 || workpad.TotalTokens != 1250 ||
+		workpad.CommitTime == nil || *workpad.CommitTime != "2026-07-24T08:30:00Z" ||
+		workpad.CommitID != "feed1234" || workpad.ImplementationApproach != "使用独立表" ||
+		workpad.Changes != "增加列表和详情展示" {
+		t.Fatalf("workpad = %#v", workpad)
+	}
+
+	item := items[0]
+	item.Title = "更新后仍保留详情"
+	updated := seedRequest(t, mux, http.MethodPatch, "/api/seeds/"+itoa(seedID), item, http.StatusOK)
+	if updated.Workpad == nil || updated.Workpad.TotalTokens != 1250 {
+		t.Fatalf("PATCH response lost workpad: %#v", updated.Workpad)
+	}
+}
+
 func TestDoingStatusCanBeCreatedAndFiltered(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "workseed.db"))
 	if err != nil {

@@ -31,5 +31,8 @@ test('随前端提供完整的 workseed-auto-work Skill', () => {
   assert.match(skill, /^---\nname: workseed-auto-work\n/)
   assert.match(skill, /事种ID:/)
   assert.match(skill, /complete_seed/)
+  assert.match(skill, /"inputTokens": INPUT_TOKENS/)
+  assert.match(skill, /"commitId": "COMMIT_ID"/)
+  assert.match(skill, /"implementationApproach": "IMPLEMENTATION_APPROACH"/)
   assert.match(skill, /## 退出概览/)
 })

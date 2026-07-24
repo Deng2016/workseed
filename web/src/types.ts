@@ -54,4 +54,15 @@ export interface Seed {
   startedAt?: string | null
   completedAt?: string | null
   durationSeconds?: number | null
+  workpad?: SeedWorkpad
+}
+
+export interface SeedWorkpad {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  commitTime?: string | null
+  commitId: string
+  implementationApproach: string
+  changes: string
 }

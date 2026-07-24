@@ -42,7 +42,29 @@ func Open(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate timestamp schema: %w", err)
 	}
+	if err := migrateWorkpadSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate workpad schema: %w", err)
+	}
 	return db, nil
+}
+
+func migrateWorkpadSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS seed_workpads (
+			seed_id INTEGER PRIMARY KEY REFERENCES seeds(id) ON DELETE CASCADE,
+			input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+			output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+			total_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+			commit_at TEXT,
+			commit_id TEXT NOT NULL DEFAULT '',
+			implementation TEXT NOT NULL DEFAULT '',
+			changes TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+		)
+	`)
+	return err
 }
 
 func migrateProjectSchema(db *sql.DB) error {

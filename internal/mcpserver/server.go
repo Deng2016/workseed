@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -37,6 +38,18 @@ type claimSeedInput struct {
 	ClaimToken string `json:"claimToken" jsonschema:"当前 Agent 为本次领取生成并在后续操作中重复使用的唯一令牌"`
 }
 
+type completeSeedInput struct {
+	SeedID                 int64  `json:"seedId" jsonschema:"事种 ID"`
+	ClaimToken             string `json:"claimToken" jsonschema:"领取事种时生成的唯一令牌"`
+	InputTokens            *int64 `json:"inputTokens,omitempty" jsonschema:"处理本事种大致消耗的输入 token 数"`
+	OutputTokens           *int64 `json:"outputTokens,omitempty" jsonschema:"处理本事种大致消耗的输出 token 数"`
+	TotalTokens            *int64 `json:"totalTokens,omitempty" jsonschema:"处理本事种大致消耗的 token 总数；省略时按输入与输出之和计算"`
+	CommitTime             string `json:"commitTime,omitempty" jsonschema:"实现提交的 RFC 3339 时间"`
+	CommitID               string `json:"commitId,omitempty" jsonschema:"实现提交的 commit ID"`
+	ImplementationApproach string `json:"implementationApproach,omitempty" jsonschema:"实现思路"`
+	Changes                string `json:"changes,omitempty" jsonschema:"具体改动说明"`
+}
+
 type skipSeedInput struct {
 	SeedID         int64  `json:"seedId" jsonschema:"事种 ID"`
 	ExpectedStatus string `json:"expectedStatus" jsonschema:"期望的当前状态：inbox、doing 或 paused；状态不匹配时拒绝跳过"`
@@ -44,19 +57,30 @@ type skipSeedInput struct {
 }
 
 type seedOutput struct {
-	ID              int64   `json:"id"`
-	ProjectID       int64   `json:"projectId"`
-	ProjectName     string  `json:"projectName"`
-	Type            string  `json:"type"`
-	Status          string  `json:"status"`
-	Title           string  `json:"title"`
-	Content         string  `json:"content"`
-	Priority        string  `json:"priority"`
-	CreatedAt       string  `json:"createdAt"`
-	UpdatedAt       string  `json:"updatedAt"`
-	StartedAt       *string `json:"startedAt,omitempty"`
-	CompletedAt     *string `json:"completedAt,omitempty"`
-	DurationSeconds *int64  `json:"durationSeconds,omitempty"`
+	ID              int64              `json:"id"`
+	ProjectID       int64              `json:"projectId"`
+	ProjectName     string             `json:"projectName"`
+	Type            string             `json:"type"`
+	Status          string             `json:"status"`
+	Title           string             `json:"title"`
+	Content         string             `json:"content"`
+	Priority        string             `json:"priority"`
+	CreatedAt       string             `json:"createdAt"`
+	UpdatedAt       string             `json:"updatedAt"`
+	StartedAt       *string            `json:"startedAt,omitempty"`
+	CompletedAt     *string            `json:"completedAt,omitempty"`
+	DurationSeconds *int64             `json:"durationSeconds,omitempty"`
+	Workpad         *seedWorkpadOutput `json:"workpad,omitempty"`
+}
+
+type seedWorkpadOutput struct {
+	InputTokens            int64   `json:"inputTokens"`
+	OutputTokens           int64   `json:"outputTokens"`
+	TotalTokens            int64   `json:"totalTokens"`
+	CommitTime             *string `json:"commitTime,omitempty"`
+	CommitID               string  `json:"commitId"`
+	ImplementationApproach string  `json:"implementationApproach"`
+	Changes                string  `json:"changes"`
 }
 
 type listSeedsOutput struct {
@@ -134,14 +158,14 @@ func Handler(db *sql.DB) http.Handler {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "complete_seed",
-		Description: "使用领取时的 claimToken 将 doing 事种改为 done。仅领取者可以完成，相同令牌重复调用保持成功。",
+		Description: "使用领取时的 claimToken 将 doing 事种改为 done，并可记录 token 用量、提交信息、实现思路和具体改动。仅领取者可以完成，相同令牌重复调用保持成功。",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "完成事种",
 			DestructiveHint: &nonDestructive,
 			IdempotentHint:  true,
 			OpenWorldHint:   &closedWorld,
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input claimSeedInput) (*mcp.CallToolResult, transitionOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input completeSeedInput) (*mcp.CallToolResult, transitionOutput, error) {
 		item, err := completeSeed(ctx, db, input)
 		if err != nil {
 			return nil, transitionOutput{}, err
@@ -284,8 +308,12 @@ func startSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOutpu
 	return commitSeedRead(ctx, tx, input.SeedID)
 }
 
-func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOutput, error) {
-	claimToken, err := validateClaimInput(input)
+func completeSeed(ctx context.Context, db *sql.DB, input completeSeedInput) (seedOutput, error) {
+	claimToken, err := validateSeedClaim(input.SeedID, input.ClaimToken)
+	if err != nil {
+		return seedOutput{}, err
+	}
+	workpad, hasWorkpad, err := normalizeCompleteWorkpad(input)
 	if err != nil {
 		return seedOutput{}, err
 	}
@@ -300,6 +328,11 @@ func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOu
 		return seedOutput{}, err
 	}
 	if currentStatus == "done" && claimTokenMatches(storedClaimToken, claimToken) {
+		if hasWorkpad {
+			if err := upsertSeedWorkpad(ctx, tx, input.SeedID, workpad); err != nil {
+				return seedOutput{}, err
+			}
+		}
 		return commitSeedRead(ctx, tx, input.SeedID)
 	}
 	if currentStatus != "doing" {
@@ -334,7 +367,85 @@ func completeSeed(ctx context.Context, db *sql.DB, input claimSeedInput) (seedOu
 			return seedOutput{}, err
 		}
 	}
+	if hasWorkpad {
+		if err := upsertSeedWorkpad(ctx, tx, input.SeedID, workpad); err != nil {
+			return seedOutput{}, err
+		}
+	}
 	return commitSeedRead(ctx, tx, input.SeedID)
+}
+
+func normalizeCompleteWorkpad(input completeSeedInput) (seedWorkpadOutput, bool, error) {
+	values := []*int64{input.InputTokens, input.OutputTokens, input.TotalTokens}
+	for _, value := range values {
+		if value != nil && *value < 0 {
+			return seedWorkpadOutput{}, false, errors.New("token 数不能为负数")
+		}
+	}
+	commitTime := strings.TrimSpace(input.CommitTime)
+	commitID := strings.TrimSpace(input.CommitID)
+	implementation := strings.TrimSpace(input.ImplementationApproach)
+	changes := strings.TrimSpace(input.Changes)
+	hasWorkpad := input.InputTokens != nil || input.OutputTokens != nil || input.TotalTokens != nil ||
+		commitTime != "" || commitID != "" || implementation != "" || changes != ""
+	if !hasWorkpad {
+		return seedWorkpadOutput{}, false, nil
+	}
+	if len(commitID) > 128 {
+		return seedWorkpadOutput{}, false, errors.New("commitId 长度不能超过 128")
+	}
+	if len(implementation) > 100000 || len(changes) > 100000 {
+		return seedWorkpadOutput{}, false, errors.New("实现思路或具体改动过长")
+	}
+	var normalizedCommitTime *string
+	if commitTime != "" {
+		parsed, err := time.Parse(time.RFC3339, commitTime)
+		if err != nil {
+			return seedWorkpadOutput{}, false, errors.New("commitTime 必须使用 RFC 3339 格式")
+		}
+		value := parsed.UTC().Format(time.RFC3339)
+		normalizedCommitTime = &value
+	}
+	inputTokens := tokenValue(input.InputTokens)
+	outputTokens := tokenValue(input.OutputTokens)
+	totalTokens := inputTokens + outputTokens
+	if input.TotalTokens != nil {
+		totalTokens = *input.TotalTokens
+	}
+	return seedWorkpadOutput{
+		InputTokens:            inputTokens,
+		OutputTokens:           outputTokens,
+		TotalTokens:            totalTokens,
+		CommitTime:             normalizedCommitTime,
+		CommitID:               commitID,
+		ImplementationApproach: implementation,
+		Changes:                changes,
+	}, true, nil
+}
+
+func tokenValue(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func upsertSeedWorkpad(ctx context.Context, tx *sql.Tx, seedID int64, workpad seedWorkpadOutput) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO seed_workpads(
+			seed_id, input_tokens, output_tokens, total_tokens, commit_at, commit_id, implementation, changes)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(seed_id) DO UPDATE SET
+			input_tokens=excluded.input_tokens,
+			output_tokens=excluded.output_tokens,
+			total_tokens=excluded.total_tokens,
+			commit_at=excluded.commit_at,
+			commit_id=excluded.commit_id,
+			implementation=excluded.implementation,
+			changes=excluded.changes,
+			updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`,
+		seedID, workpad.InputTokens, workpad.OutputTokens, workpad.TotalTokens, workpad.CommitTime,
+		workpad.CommitID, workpad.ImplementationApproach, workpad.Changes)
+	return err
 }
 
 func skipSeed(ctx context.Context, db *sql.DB, input skipSeedInput) (seedOutput, error) {
@@ -398,10 +509,14 @@ func skipSeed(ctx context.Context, db *sql.DB, input skipSeedInput) (seedOutput,
 }
 
 func validateClaimInput(input claimSeedInput) (string, error) {
-	if input.SeedID < 1 {
+	return validateSeedClaim(input.SeedID, input.ClaimToken)
+}
+
+func validateSeedClaim(seedID int64, claimToken string) (string, error) {
+	if seedID < 1 {
 		return "", errors.New("seedId 必须是正整数")
 	}
-	return normalizeClaimToken(input.ClaimToken)
+	return normalizeClaimToken(claimToken)
 }
 
 func normalizeClaimToken(value string) (string, error) {
@@ -463,26 +578,52 @@ func commitSeedRead(ctx context.Context, tx *sql.Tx, seedID int64) (seedOutput, 
 }
 
 const seedColumns = `s.id, s.project_id, p.name, s.type, s.status, s.title, s.content, s.priority,
-	s.created_at, s.updated_at, s.started_at, s.completed_at, s.duration_seconds`
+	s.created_at, s.updated_at, s.started_at, s.completed_at, s.duration_seconds,
+	(SELECT input_tokens FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT output_tokens FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT total_tokens FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT commit_at FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT commit_id FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT implementation FROM seed_workpads WHERE seed_id=s.id),
+	(SELECT changes FROM seed_workpads WHERE seed_id=s.id)`
 
 type seedScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanSeed(row seedScanner, item *seedOutput) error {
-	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
-		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
-		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds); err != nil {
-		return err
-	}
-	return normalizeSeedTimes(item)
+	return scanSeedData(row, item)
 }
 
 func scanSeedWithClaim(row seedScanner, item *seedOutput, claimToken *sql.NullString) error {
-	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
+	return scanSeedData(row, item, claimToken)
+}
+
+func scanSeedData(row seedScanner, item *seedOutput, trailing ...any) error {
+	var inputTokens, outputTokens, totalTokens sql.NullInt64
+	var commitTime, commitID, implementation, changes sql.NullString
+	destinations := []any{
+		&item.ID, &item.ProjectID, &item.ProjectName, &item.Type, &item.Status,
 		&item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
-		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds, claimToken); err != nil {
+		&item.StartedAt, &item.CompletedAt, &item.DurationSeconds,
+		&inputTokens, &outputTokens, &totalTokens, &commitTime, &commitID, &implementation, &changes,
+	}
+	destinations = append(destinations, trailing...)
+	if err := row.Scan(destinations...); err != nil {
 		return err
+	}
+	if inputTokens.Valid {
+		item.Workpad = &seedWorkpadOutput{
+			InputTokens:            inputTokens.Int64,
+			OutputTokens:           outputTokens.Int64,
+			TotalTokens:            totalTokens.Int64,
+			CommitID:               commitID.String,
+			ImplementationApproach: implementation.String,
+			Changes:                changes.String,
+		}
+		if commitTime.Valid {
+			item.Workpad.CommitTime = &commitTime.String
+		}
 	}
 	return normalizeSeedTimes(item)
 }
@@ -501,6 +642,12 @@ func normalizeSeedTimes(item *seedOutput) error {
 		return err
 	}
 	item.CompletedAt, err = utctime.FormatOptionalRFC3339(item.CompletedAt)
+	if err != nil {
+		return err
+	}
+	if item.Workpad != nil {
+		item.Workpad.CommitTime, err = utctime.FormatOptionalRFC3339(item.Workpad.CommitTime)
+	}
 	return err
 }
 

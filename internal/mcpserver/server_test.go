@@ -135,7 +135,16 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertToolError(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": "other-agent-claim"})
-	completeResult := callTool(t, session, "complete_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
+	assertToolError(t, session, "complete_seed", map[string]any{
+		"seedId": highPriorityID, "claimToken": highClaimToken, "inputTokens": -1,
+	})
+	completeResult := callTool(t, session, "complete_seed", map[string]any{
+		"seedId": highPriorityID, "claimToken": highClaimToken,
+		"inputTokens": 1200, "outputTokens": 350, "totalTokens": 1600,
+		"commitTime": "2026-07-24T16:30:00+08:00", "commitId": "abc123def456",
+		"implementationApproach": "新增独立 Workpad 表并在完成时原子写入",
+		"changes":                "扩展 MCP 契约，同时让 API 返回处理详情",
+	})
 	var completed transitionOutput
 	decodeStructured(t, completeResult.StructuredContent, &completed)
 	if completed.Seed.Status != "done" || completed.Seed.CompletedAt == nil {
@@ -148,6 +157,12 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	}
 	if completed.Seed.DurationSeconds == nil || *completed.Seed.DurationSeconds != wantDuration {
 		t.Fatalf("duration = %v, want %d", completed.Seed.DurationSeconds, wantDuration)
+	}
+	if completed.Seed.Workpad == nil || completed.Seed.Workpad.InputTokens != 1200 ||
+		completed.Seed.Workpad.OutputTokens != 350 || completed.Seed.Workpad.TotalTokens != 1600 ||
+		completed.Seed.Workpad.CommitTime == nil || *completed.Seed.Workpad.CommitTime != "2026-07-24T08:30:00Z" ||
+		completed.Seed.Workpad.CommitID != "abc123def456" {
+		t.Fatalf("completed workpad = %#v", completed.Seed.Workpad)
 	}
 	var storedStartedAt, storedCompletedAt, storedUpdatedAt string
 	if err := db.QueryRow(`SELECT started_at, completed_at, updated_at FROM seeds WHERE id=?`, highPriorityID).
@@ -162,6 +177,9 @@ func TestMCPAgentSeedWorkflow(t *testing.T) {
 	decodeStructured(t, duplicateComplete.StructuredContent, &completedAgain)
 	if completedAgain.Seed.Status != "done" {
 		t.Fatalf("idempotent complete seed = %#v", completedAgain.Seed)
+	}
+	if completedAgain.Seed.Workpad == nil || completedAgain.Seed.Workpad.TotalTokens != 1600 {
+		t.Fatalf("idempotent complete lost workpad: %#v", completedAgain.Seed.Workpad)
 	}
 	doneResult := callTool(t, session, "get_seed", map[string]any{"seedId": highPriorityID, "claimToken": highClaimToken})
 	var fetchedDone getSeedOutput

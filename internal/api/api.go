@@ -35,18 +35,29 @@ type settings struct {
 }
 
 type seed struct {
-	ID          int64   `json:"id"`
-	ProjectID   int64   `json:"projectId"`
-	Type        string  `json:"type"`
-	Status      string  `json:"status"`
-	Title       string  `json:"title"`
-	Content     string  `json:"content"`
-	Priority    string  `json:"priority"`
-	CreatedAt   string  `json:"createdAt"`
-	UpdatedAt   string  `json:"updatedAt"`
-	StartedAt   *string `json:"startedAt"`
-	CompletedAt *string `json:"completedAt"`
-	DurationSec *int64  `json:"durationSeconds"`
+	ID          int64        `json:"id"`
+	ProjectID   int64        `json:"projectId"`
+	Type        string       `json:"type"`
+	Status      string       `json:"status"`
+	Title       string       `json:"title"`
+	Content     string       `json:"content"`
+	Priority    string       `json:"priority"`
+	CreatedAt   string       `json:"createdAt"`
+	UpdatedAt   string       `json:"updatedAt"`
+	StartedAt   *string      `json:"startedAt"`
+	CompletedAt *string      `json:"completedAt"`
+	DurationSec *int64       `json:"durationSeconds"`
+	Workpad     *seedWorkpad `json:"workpad,omitempty"`
+}
+
+type seedWorkpad struct {
+	InputTokens            int64   `json:"inputTokens"`
+	OutputTokens           int64   `json:"outputTokens"`
+	TotalTokens            int64   `json:"totalTokens"`
+	CommitTime             *string `json:"commitTime,omitempty"`
+	CommitID               string  `json:"commitId"`
+	ImplementationApproach string  `json:"implementationApproach"`
+	Changes                string  `json:"changes"`
 }
 
 func Register(mux *http.ServeMux, db *sql.DB) {
@@ -584,15 +595,40 @@ func validateSeed(s *seed) error {
 	return nil
 }
 
-const seedColumns = `id, project_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds`
+const seedColumns = `id, project_id, type, status, title, content, priority, created_at, updated_at, started_at, completed_at, duration_seconds,
+	(SELECT input_tokens FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT output_tokens FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT total_tokens FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT commit_at FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT commit_id FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT implementation FROM seed_workpads WHERE seed_id=seeds.id),
+	(SELECT changes FROM seed_workpads WHERE seed_id=seeds.id)`
 
 type seedScanner interface {
 	Scan(dest ...any) error
 }
 
 func scanSeed(row seedScanner, item *seed) error {
-	if err := row.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content, &item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.StartedAt, &item.CompletedAt, &item.DurationSec); err != nil {
+	var inputTokens, outputTokens, totalTokens sql.NullInt64
+	var commitTime, commitID, implementation, changes sql.NullString
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.Type, &item.Status, &item.Title, &item.Content,
+		&item.Priority, &item.CreatedAt, &item.UpdatedAt, &item.StartedAt, &item.CompletedAt,
+		&item.DurationSec, &inputTokens, &outputTokens, &totalTokens, &commitTime, &commitID,
+		&implementation, &changes); err != nil {
 		return err
+	}
+	if inputTokens.Valid {
+		item.Workpad = &seedWorkpad{
+			InputTokens:            inputTokens.Int64,
+			OutputTokens:           outputTokens.Int64,
+			TotalTokens:            totalTokens.Int64,
+			CommitID:               commitID.String,
+			ImplementationApproach: implementation.String,
+			Changes:                changes.String,
+		}
+		if commitTime.Valid {
+			item.Workpad.CommitTime = &commitTime.String
+		}
 	}
 	return normalizeSeedTimes(item)
 }
@@ -628,6 +664,12 @@ func normalizeSeedTimes(item *seed) error {
 		return err
 	}
 	item.CompletedAt, err = utctime.FormatOptionalRFC3339(item.CompletedAt)
+	if err != nil {
+		return err
+	}
+	if item.Workpad != nil {
+		item.Workpad.CommitTime, err = utctime.FormatOptionalRFC3339(item.Workpad.CommitTime)
+	}
 	return err
 }
 

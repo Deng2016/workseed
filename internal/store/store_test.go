@@ -242,6 +242,50 @@ func TestNewSchemaDefaultsUseRFC3339UTC(t *testing.T) {
 	}
 }
 
+func TestWorkpadSchemaStoresDetailsAndCascadesWithSeed(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "workseed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	projectResult, err := db.Exec(`INSERT INTO projects(name) VALUES('详情项目')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID, _ := projectResult.LastInsertId()
+	seedResult, err := db.Exec(`INSERT INTO seeds(project_id, type, title) VALUES(?, 'feature', '详情事种')`, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedID, _ := seedResult.LastInsertId()
+	if _, err := db.Exec(`INSERT INTO seed_workpads(
+			seed_id, input_tokens, output_tokens, total_tokens, commit_at, commit_id, implementation, changes)
+		VALUES(?, 100, 50, 150, '2026-07-24T08:30:00Z', 'abc123', '实现思路', '具体改动')`, seedID); err != nil {
+		t.Fatal(err)
+	}
+
+	var totalTokens int64
+	var commitID string
+	if err := db.QueryRow(`SELECT total_tokens, commit_id FROM seed_workpads WHERE seed_id=?`, seedID).
+		Scan(&totalTokens, &commitID); err != nil {
+		t.Fatal(err)
+	}
+	if totalTokens != 150 || commitID != "abc123" {
+		t.Fatalf("stored workpad = totalTokens %d, commitID %q", totalTokens, commitID)
+	}
+	if _, err := db.Exec(`DELETE FROM seeds WHERE id=?`, seedID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM seed_workpads WHERE seed_id=?`, seedID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("workpad count after deleting seed = %d, want 0", count)
+	}
+}
+
 func assertRFC3339UTC(t *testing.T, value string) {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339, value)

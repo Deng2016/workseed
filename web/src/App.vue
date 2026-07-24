@@ -342,6 +342,9 @@ function formatDuration(value?: number | null) {
   if (!parts.length || seconds) parts.push(`${seconds}秒`)
   return parts.join(' ')
 }
+function formatTokenCount(value: number) {
+  return new Intl.NumberFormat('zh-CN').format(value)
+}
 function formatDateInput(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -506,6 +509,7 @@ onBeforeUnmount(() => {
             <select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+            <i v-if="seed.workpad">·</i><span v-if="seed.workpad" class="token-total">约 {{ formatTokenCount(seed.workpad.totalTokens) }} tokens</span>
             <button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制 ID、标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button>
             <span
               v-if="seed.status === 'done' && (seed.startedAt || seed.completedAt || seed.durationSeconds != null)"
@@ -642,7 +646,19 @@ onBeforeUnmount(() => {
   </div>
 
   <div v-if="currentPage !== 'settings' && seedDialog" class="overlay" @click.self="seedDialog = false">
-    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><label v-if="editingSeed">事种编号<input :value="editingSeed.id" readonly /></label><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>开始时间<strong>{{ formatTime(editingSeed.startedAt) }}</strong></span><span>处理耗时<strong>{{ formatDuration(editingSeed.durationSeconds) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span></div><div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
+    <form class="dialog seed-form" @submit.prevent="saveSeed"><button type="button" class="close" @click="seedDialog = false">×</button><p class="eyebrow">{{ editingId ? '照料种子' : '捕捉此刻' }}</p><h2>{{ editingId ? '编辑种子' : '播下一颗种子' }}</h2><label v-if="editingSeed">事种编号<input :value="editingSeed.id" readonly /></label><div class="grid"><label>类型<select v-model="seedForm.type"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>状态<select v-model="seedForm.status"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label>优先级<select v-model="seedForm.priority"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label></div><label>标题<input v-model="seedForm.title" autofocus placeholder="一句话记下它" /></label><label>详细内容<textarea ref="contentInput" v-model="seedForm.content" rows="9" v-on:input="resizeContentFromEvent" placeholder="背景、想法或验收方式……"></textarea></label><div v-if="editingSeed" class="seed-timestamps"><span>创建时间<strong>{{ formatTime(editingSeed.createdAt) }}</strong></span><span>开始时间<strong>{{ formatTime(editingSeed.startedAt) }}</strong></span><span>处理耗时<strong>{{ formatDuration(editingSeed.durationSeconds) }}</strong></span><span>完成时间<strong>{{ formatTime(editingSeed.completedAt) }}</strong></span></div>
+      <section v-if="editingSeed?.workpad" class="seed-workpad">
+        <div class="workpad-heading"><div><p class="eyebrow">WORKPAD</p><h3>处理记录</h3></div><span v-if="editingSeed.workpad.commitTime">{{ formatTime(editingSeed.workpad.commitTime) }}</span></div>
+        <div class="workpad-tokens">
+          <span><small>输入</small><strong>{{ formatTokenCount(editingSeed.workpad.inputTokens) }}</strong></span>
+          <span><small>输出</small><strong>{{ formatTokenCount(editingSeed.workpad.outputTokens) }}</strong></span>
+          <span><small>总计</small><strong>{{ formatTokenCount(editingSeed.workpad.totalTokens) }}</strong></span>
+        </div>
+        <div v-if="editingSeed.workpad.commitId" class="workpad-commit"><small>COMMIT</small><code>{{ editingSeed.workpad.commitId }}</code></div>
+        <div v-if="editingSeed.workpad.implementationApproach" class="workpad-section"><h4>实现思路</h4><p>{{ editingSeed.workpad.implementationApproach }}</p></div>
+        <div v-if="editingSeed.workpad.changes" class="workpad-section"><h4>具体改动</h4><p>{{ editingSeed.workpad.changes }}</p></div>
+      </section>
+      <div class="actions"><button type="button" class="quiet" @click="seedDialog = false">取消</button><button class="primary">{{ editingId ? '保存修改' : '播下种子' }}</button></div></form>
   </div>
   <div v-if="error" class="toast">{{ error }}</div>
 </template>
