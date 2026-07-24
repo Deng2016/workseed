@@ -1119,9 +1119,125 @@ textarea:focus {
     margin: 0;
 }
 
+.agent-integration {
+    display: grid;
+    gap: 18px;
+}
+
+.agent-integration-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.agent-integration-heading code,
+.agent-setup-steps code {
+    color: #4f6c59;
+    font-size: .95em;
+}
+
+.agent-integration-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 8px;
+}
+
+.agent-setup-steps {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 22px;
+    color: #59645c;
+    font-size: 13px;
+    line-height: 1.65;
+}
+
+.mcp-config {
+    overflow: hidden;
+    border: 1px solid #d9ddd5;
+    border-radius: 12px;
+    background: #f4f5f0;
+}
+
+.skill-preview {
+    overflow: hidden;
+    border: 1px solid #d9ddd5;
+    border-radius: 12px;
+    background: #f8f8f4;
+}
+
+.skill-preview summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    color: #59645c;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.skill-preview summary code {
+    color: #829087;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.skill-preview[open] summary {
+    border-bottom: 1px solid #d9ddd5;
+}
+
+.skill-preview pre {
+    overflow: auto;
+    max-height: 360px;
+    margin: 0;
+    padding: 16px;
+    color: #344237;
+    font: 12px/1.65 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    white-space: pre-wrap;
+}
+
+.mcp-config-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 14px;
+    border-bottom: 1px solid #d9ddd5;
+    color: #6f7b72;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+}
+
+.mcp-config-label code {
+    overflow: hidden;
+    color: #4f6c59;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mcp-config pre {
+    overflow-x: auto;
+    margin: 0;
+    padding: 16px;
+    color: #344237;
+    font: 12px/1.65 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.agent-integration .agent-integration-note {
+    color: #8a938c;
+    font-size: 12px;
+}
+
 .worktime-fields {
     display: grid;
-    grid-template-columns: minmax(150px, 240px) auto minmax(150px, 240px);
+    grid-template-columns: minmax(180px, 240px) auto minmax(180px, 240px) 1fr;
     align-items: end;
     gap: 12px;
     margin-top: 20px;
@@ -1135,6 +1251,10 @@ textarea:focus {
 .worktime-fields>span {
     padding-bottom: 11px;
     color: #9aa29b;
+}
+
+.worktime-save {
+    justify-self: end;
 }
 
 .project-management {
@@ -1314,9 +1434,33 @@ textarea:focus {
 		display: none;
 	}
 
+    .worktime-save {
+        justify-self: stretch;
+    }
+
 	.managed-project-actions {
 		margin-top: 12px;
 	}
+
+    .agent-integration-heading {
+        display: block;
+    }
+
+    .agent-integration-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        margin-top: 14px;
+    }
+
+    .mcp-config-label {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .mcp-config-label code {
+        max-width: 100%;
+    }
 
     .worklog-shell {
         padding: 24px 16px 45px;

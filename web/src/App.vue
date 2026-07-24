@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { buildWorkseedMcpEndpoint, formatWorkseedMcpConfig } from './agentIntegration'
 import { api } from './api'
 import { formatSeedCopyText } from './seedCopy'
+import workseedAutoWorkSkill from './skills/workseed-auto-work/SKILL.md?raw'
 import type { AppSettings, Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
 
 type Page = 'seeds' | 'worklogs' | 'settings'
@@ -67,6 +69,8 @@ const contentInput = ref<HTMLTextAreaElement | null>(null)
 const editingId = ref<number | null>(null)
 const editingSeed = ref<Seed | null>(null)
 const copiedSeedId = ref<number | null>(null)
+const copiedSkill = ref(false)
+const copiedMcpConfig = ref(false)
 const busy = ref(false)
 const loadingMore = ref(false)
 const seedPage = ref(0)
@@ -78,12 +82,16 @@ const managedProjects = ref<Project[]>([])
 const settingsBusy = ref(false)
 const settingsSaving = ref(false)
 let copyFeedbackTimer: number | undefined
+let skillCopyFeedbackTimer: number | undefined
+let mcpCopyFeedbackTimer: number | undefined
 let seedLoadToken = 0
 let loadMoreObserver: IntersectionObserver | undefined
 const seedPageSize = 20
 const projectForm = reactive({ name: '', description: '' })
 const seedForm = reactive({ type: 'todo' as SeedType, status: 'inbox' as SeedStatus, title: '', content: '', priority: 'middle' as SeedPriority })
 const settingsForm = reactive<AppSettings>({ workdayStart: '10:00', workdayEnd: '19:00' })
+const mcpEndpoint = buildWorkseedMcpEndpoint(window.location.port)
+const mcpConfig = formatWorkseedMcpConfig(window.location.port)
 
 const currentProject = computed(() => projects.value.find(p => p.id === projectId.value))
 const count = (type: SeedType | 'all') => type === 'all' ? counts.value.total : counts.value[type]
@@ -285,6 +293,22 @@ async function copySeed(seed: Seed) {
     copyFeedbackTimer = window.setTimeout(() => copiedSeedId.value = null, 1600)
   } catch (e) { showError(e) }
 }
+async function copyMcpConfig() {
+  try {
+    await writeClipboard(mcpConfig)
+    copiedMcpConfig.value = true
+    window.clearTimeout(mcpCopyFeedbackTimer)
+    mcpCopyFeedbackTimer = window.setTimeout(() => copiedMcpConfig.value = false, 1600)
+  } catch (e) { showError(e) }
+}
+async function copySkill() {
+  try {
+    await writeClipboard(workseedAutoWorkSkill)
+    copiedSkill.value = true
+    window.clearTimeout(skillCopyFeedbackTimer)
+    skillCopyFeedbackTimer = window.setTimeout(() => copiedSkill.value = false, 1600)
+  } catch (e) { showError(e) }
+}
 async function removeSeed(id: number) {
   if (!confirm('确定删除这颗种子吗？')) return
   try { await api.deleteSeed(id); await loadSeeds() } catch (e) { showError(e) }
@@ -428,6 +452,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('storage', syncProjectFromStorage)
   loadMoreObserver?.disconnect()
   window.clearTimeout(copyFeedbackTimer)
+  window.clearTimeout(skillCopyFeedbackTimer)
+  window.clearTimeout(mcpCopyFeedbackTimer)
 })
 </script>
 
@@ -562,7 +588,7 @@ onBeforeUnmount(() => {
       <a class="quiet nav-link" href="#/">返回种子列表</a>
     </header>
     <section class="settings-shell">
-      <div class="settings-heading"><div><p class="eyebrow">PREFERENCES</p><h1>设置</h1></div><p>管理项目与工作时间。</p></div>
+      <div class="settings-heading"><div><p class="eyebrow">PREFERENCES</p><h1>设置</h1></div><p>管理项目、工作时间与 Agent 接入。</p></div>
       <p v-if="settingsBusy" class="empty">正在读取设置……</p>
       <div v-else class="settings-grid">
         <form class="settings-card" @submit.prevent="saveSettings">
@@ -571,9 +597,31 @@ onBeforeUnmount(() => {
             <label>上班时间<input v-model="settingsForm.workdayStart" type="time" required /></label>
             <span>—</span>
             <label>下班时间<input v-model="settingsForm.workdayEnd" type="time" required /></label>
+            <button class="primary worktime-save" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存工作时间' }}</button>
           </div>
-          <div class="actions"><button class="primary" :disabled="settingsSaving">{{ settingsSaving ? '保存中…' : '保存工作时间' }}</button></div>
         </form>
+        <section class="settings-card agent-integration">
+          <div class="agent-integration-heading">
+            <div><p class="eyebrow">AGENT</p><h2>Agent 接入</h2><p><code>workseed-auto-work</code> Skill 已内置在 Workseed 中，无需另外下载。</p></div>
+            <div class="agent-integration-actions">
+              <button class="quiet" type="button" @click="copySkill">{{ copiedSkill ? '✓ 已复制 Skill' : '复制 Skill' }}</button>
+              <button class="quiet" type="button" @click="copyMcpConfig">{{ copiedMcpConfig ? '✓ 已复制配置' : '复制配置' }}</button>
+            </div>
+          </div>
+          <ol class="agent-setup-steps">
+            <li>点击“复制 Skill”并保存为 Skill 文件：Codex 使用 <code>~/.agents/skills/workseed-auto-work/SKILL.md</code>，Claude Code 使用 <code>~/.claude/skills/workseed-auto-work/SKILL.md</code>。</li>
+            <li>点击“复制配置”，在 Agent 中添加名为 <code>workseed</code> 的 Streamable HTTP MCP 服务。</li>
+          </ol>
+          <details class="skill-preview">
+            <summary><span>查看内置 Skill 内容</span><code>workseed-auto-work/SKILL.md</code></summary>
+            <pre><code>{{ workseedAutoWorkSkill }}</code></pre>
+          </details>
+          <div class="mcp-config">
+            <div class="mcp-config-label"><span>MCP 配置</span><code>{{ mcpEndpoint }}</code></div>
+            <pre><code>{{ mcpConfig }}</code></pre>
+          </div>
+          <p class="agent-integration-note">端口已根据本次 Workseed 启动地址自动生成；如果 Agent 使用其他配置格式，请直接填写上方 MCP 地址。端口变化后需要重新配置。</p>
+        </section>
         <section class="settings-card project-management">
           <div><p class="eyebrow">PROJECTS</p><h2>项目管理</h2><p>归档项目会从事种查询与项目选择中隐藏。</p></div>
           <div v-if="!managedProjects.length" class="settings-empty">还没有项目</div>
