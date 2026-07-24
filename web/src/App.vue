@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { api } from './api'
+import { formatSeedCopyText } from './seedCopy'
 import type { AppSettings, Project, Seed, SeedCounts, SeedPriority, SeedStatus, SeedType } from './types'
 
 type Page = 'seeds' | 'worklogs' | 'settings'
@@ -276,7 +277,7 @@ async function writeClipboard(text: string) {
   if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限')
 }
 async function copySeed(seed: Seed) {
-  const text = [seed.title, seed.content].filter(Boolean).join('\n')
+  const text = formatSeedCopyText(seed)
   try {
     await writeClipboard(text)
     copiedSeedId.value = seed.id
@@ -479,7 +480,7 @@ onBeforeUnmount(() => {
             <select :value="seed.type" aria-label="种子类型" @click.stop @change="updateSeedMeta(seed, 'type', $event)"><option v-for="item in types.slice(1)" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.status" aria-label="种子状态" @click.stop @change="updateSeedMeta(seed, 'status', $event)"><option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option></select><i>·</i>
             <select :value="seed.priority" aria-label="种子优先级" @click.stop @change="updateSeedMeta(seed, 'priority', $event)"><option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option></select>
-            <button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button>
+            <button class="copy-button" type="button" :title="copiedSeedId === seed.id ? '已复制' : '复制 ID、标题与内容'" @click.stop="copySeed(seed)">{{ copiedSeedId === seed.id ? '✓ 已复制' : '复制' }}</button>
             <span
               v-if="seed.status === 'done' && (seed.startedAt || seed.completedAt || seed.durationSeconds != null)"
               class="list-timestamps"

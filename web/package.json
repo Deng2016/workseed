@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vue-tsc -b && vite build", "typecheck": "vue-tsc -b" },
+  "scripts": { "dev": "vite", "build": "vue-tsc -b && vite build", "typecheck": "vue-tsc -b", "test": "node --test test/*.test.mjs" },
   "dependencies": { "@vitejs/plugin-vue": "^6.0.0", "vite": "^7.0.0", "vue": "^3.5.0" },
   "devDependencies": { "@types/node": "^24.0.0", "@vue/tsconfig": "^0.8.0", "typescript": "~5.8.0", "vue-tsc": "^3.0.0" }
 }
